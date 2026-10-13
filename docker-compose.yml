@@ -1,0 +1,77 @@
+# Production-like topology: web + conversion workers + Redis.
+# Set SESSION_SECRET (and PUBLIC_ORIGIN) in a .env file next to this file first.
+x-app: &app
+  build: .
+  image: anyform:latest
+  restart: unless-stopped
+  environment: &env
+    NODE_ENV: production
+    REDIS_URL: redis://redis:6379/0
+    SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+    PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+    ANYFORM_DATA_DIR: /data
+  volumes:
+    # Web and workers share object storage (local driver). See docs/DEPLOYMENT.md.
+    - anyform-data:/data
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+    - /app/.next/cache:size=64m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  web:
+    <<: *app
+    ports:
+      - "${ANYFORM_PORT:-3000}:3000"
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["node", "dist/index.js"]
+    environment:
+      <<: *env
+      WORKER_CONCURRENCY: "2"
+      FFMPEG_THREADS: "2"
+    # Workers parse untrusted media: no internet access, bounded CPU/memory/processes.
+    networks: [internal]
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
+          pids: 128
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    restart: unless-stopped
+    networks: [internal]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  edge: {}
+  internal:
+    internal: true
+
+volumes:
+  anyform-data: {}
+  redis-data: {}

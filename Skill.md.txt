@@ -1,0 +1,56 @@
+---
+name: anyform-engineering
+description: Build, extend, debug, test, and audit ANYFORM, a universal file-conversion platform with secure uploads, extensible conversion adapters, FFmpeg processing, background jobs, and verified downloads. Use when modifying ANYFORM's architecture, conversion engine, APIs, UI, or infrastructure.
+---
+
+# ANYFORM Engineering Standards
+
+## Product principles
+- Build real, functional features. Never substitute mock data for actual conversion behavior.
+- Prioritize a complete, verified MP4-to-MP3 workflow before expanding format support.
+- Make every new conversion an independently testable adapter.
+- Advertise only conversions that are actually supported.
+
+## Architecture
+- Inspect the existing repository before changing architecture.
+- Reuse established frameworks, dependencies, and conventions where practical.
+- Separate upload handling, validation, media inspection, conversion, job orchestration, output verification, and downloads.
+- Keep conversion adapters independent of the frontend and API.
+- Validate conversion compatibility before enqueueing jobs.
+- Use explicit, typed job states and consistent error contracts.
+
+## Media processing
+- Use FFmpeg for conversion and FFprobe for media inspection.
+- Verify the presence of an audio stream before MP4-to-MP3 conversion.
+- Validate the resulting MP3 before making it downloadable.
+- Pass process arguments safely without shell interpolation.
+- Enforce execution timeouts, resource limits, and cancellation.
+- Never report fabricated progress or success.
+
+## Security
+- Treat uploaded files as untrusted.
+- Never trust extensions, MIME types, filenames, or user-provided paths.
+- Use isolated temporary directories and generated filenames.
+- Enforce upload limits, quotas, authorization, and retention policies.
+- Protect job status, cancellation, deletion, and download routes.
+- Run media workers with least privilege.
+- Never bypass DRM or source-service access controls.
+- Do not expose secrets, internal paths, or sensitive diagnostics.
+
+## Quality standards
+- Write unit, integration, and negative tests for every meaningful feature.
+- Test actual conversion output, not just successful HTTP responses.
+- Run applicable tests, linting, type checking, and production builds.
+- Fix regressions before completing a task.
+- Remove dead code only after confirming it is unused.
+- Update documentation and environment examples when configuration changes.
+
+## Execution workflow
+1. Inspect the affected files and dependencies.
+2. Identify requirements, risks, and existing regressions.
+3. Implement the smallest complete solution.
+4. Add or update tests.
+5. Run relevant verification commands.
+6. Report files changed, checks performed, actual results, and unresolved limitations.
+
+Never claim a feature, test, or deployment works unless it has been verified.

@@ -1,0 +1,54 @@
+{
+  "name": "anyform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ANYFORM — universal file conversion platform. Everything in. Anything out.",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && npm run build:worker && npm run build:sandbox",
+    "build:worker": "esbuild src/worker/index.ts src/worker/cleanup.ts --bundle --platform=node --target=node20 --packages=external --outdir=dist --tsconfig=tsconfig.json",
+    "start": "next start",
+    "worker": "tsx src/worker/index.ts",
+    "worker:prod": "node dist/index.js",
+    "cleanup": "tsx src/worker/cleanup.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:sandbox": "esbuild src/sandbox/cli.ts --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/sandbox.mjs --tsconfig=tsconfig.json"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "bullmq": "^5.81.5",
+    "ioredis": "^5.11.1",
+    "next": "^16.4.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.4.299",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "sharp": "^0.35.5",
+    "tar-stream": "^3.2.2",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/tar-stream": "^3.1.5",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

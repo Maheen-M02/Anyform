@@ -1,0 +1,5 @@
+# Store and check out text files with LF everywhere (Docker/Linux tooling expects it).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
