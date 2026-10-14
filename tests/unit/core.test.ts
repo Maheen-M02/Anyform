@@ -5,7 +5,7 @@ import { assertJobTransition, canTransitionJob, canTransitionUpload, JOB_STATUSE
 import { AppError, ERROR_CODES, errorBody, toAppError } from '@/server/errors'
 import { isId, newId } from '@/server/ids'
 import { RateLimiter } from '@/server/rate-limit'
-import { parseRange } from '@/server/services/conversions'
+import { parseRange } from '@/server/services/serve'
 import { encodeSessionCookie, readCookie, verifySessionCookie } from '@/server/session'
 import { storageKey } from '@/server/storage'
 

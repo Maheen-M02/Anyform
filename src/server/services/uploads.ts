@@ -1,6 +1,9 @@
+import { createReadStream } from 'node:fs'
+import { mkdir, rm, stat } from 'node:fs/promises'
+import path from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web'
-import { displayFilename } from '@/lib/filename'
+import { displayFilename, outputFilename } from '@/lib/filename'
 import { FORMATS, formatFromFilename, type FormatId } from '@/lib/formats'
 import { assertUploadTransition, isActiveJob, type UploadStatus } from '@/lib/states'
 import { describePlan, type OutputChoice } from '../conversions/registry'
@@ -11,7 +14,11 @@ import { logger } from '../logger'
 import { metrics } from '../metrics'
 import { inspectFile, unsupportedReason, type FileInfo } from '../inspect'
 import { sniffFile } from '../media/sniff'
-import { fetchRemote } from '../imports/fetch'
+import { fetchRemote, parseImportUrl } from '../imports/fetch'
+import { classifyMediaSite, parseSpotifyTrackPage, spotifySearchQuery, unwrapImageSearchLink, type MediaSite } from '../imports/media-sites'
+import { downloadWithYtDlp } from '../imports/ytdlp'
+import { findPageMedia, isHtmlContentType, MAX_PAGE_BYTES } from '../imports/page'
+import { serveObject } from './serve'
 import type { Runtime } from '../runtime'
 import { storageKey } from '../storage'
 import type { UploadRecord } from '../store/types'
@@ -20,6 +27,8 @@ export interface UploadView {
   id: string
   filename: string
   sizeBytes: number
+  /** Download of the original file (validated uploads only). */
+  originalUrl: string | null
   /** Where the file came from; for links only the host is kept. */
   origin: NonNullable<UploadRecord['origin']>
   status: UploadStatus
@@ -167,21 +176,40 @@ export async function receiveUpload(rt: RT, sessionId: string, req: Request): Pr
 }
 
 /**
- * Downloads a file from a user-supplied link (SSRF-protected, see
- * imports/fetch.ts) and stores it exactly like an upload.
+ * Downloads a file from a user-supplied link and stores it exactly like an
+ * upload. Direct files and web pages go through the SSRF-protected fetcher
+ * (imports/fetch.ts); YouTube and Spotify links go through yt-dlp
+ * (imports/media-sites.ts).
  */
 export async function importFromUrl(rt: RT, sessionId: string, rawUrl: string): Promise<UploadView> {
   const cfg = getConfig()
   if (!cfg.importEnabled) throw new AppError('IMPORT_DISABLED', 'Importing from links is disabled on this server.')
   // Quota and disk are checked before contacting the remote server.
   const budget = await admit(rt, sessionId, null)
-  const remote = await fetchRemote(rawUrl, {
+  const fetchOpts = {
     maxBytes: budget.maxBytes,
     timeoutMs: cfg.importTimeoutMs,
     maxRedirects: cfg.importMaxRedirects,
     allowPrivate: cfg.importAllowPrivateNetworks,
     allowedHosts: cfg.importAllowedHosts,
-  })
+  }
+  let url = parseImportUrl(rawUrl, fetchOpts)
+  // Image-search result links wrap the real image: go straight to it.
+  const wrapped = unwrapImageSearchLink(url)
+  if (wrapped) url = parseImportUrl(wrapped, fetchOpts)
+
+  const site = classifyMediaSite(url)
+  if (site) return importFromMediaSite(rt, sessionId, site, budget, fetchOpts)
+
+  let remote = await fetchRemote(url.href, fetchOpts)
+  let page: string | undefined
+  if (isHtmlContentType(remote.contentType)) {
+    // A page rather than a file: download the media the page itself declares.
+    page = remote.host
+    const found = await mediaFromPage(remote, fetchOpts)
+    if ('site' in found) return importFromMediaSite(rt, sessionId, found.site, budget, fetchOpts, page)
+    remote = found.remote
+  }
   try {
     if (remote.declaredLength !== null) await admit(rt, sessionId, remote.declaredLength)
     return await persist(rt, sessionId, remote.body, {
@@ -189,7 +217,7 @@ export async function importFromUrl(rt: RT, sessionId: string, rawUrl: string): 
       declared: remote.declaredLength,
       budget,
       // Only the host is kept: full URLs can carry access tokens.
-      origin: { kind: 'url', host: remote.host },
+      origin: page ? { kind: 'url', host: remote.host, page } : { kind: 'url', host: remote.host },
       mapStreamError: () =>
         remote.timedOut()
           ? new AppError('IMPORT_TIMEOUT', 'The download took too long and was stopped.')
@@ -198,6 +226,61 @@ export async function importFromUrl(rt: RT, sessionId: string, rawUrl: string): 
   } finally {
     remote.finish()
     remote.body.destroy()
+  }
+}
+
+/**
+ * YouTube video → MP4 (YouTube Music → MP3); Spotify track → MP3 of the same
+ * recording found on YouTube. Spotify's DRM-protected stream is never used:
+ * only the public track page is read, for the title and artist.
+ */
+async function importFromMediaSite(
+  rt: RT,
+  sessionId: string,
+  site: MediaSite,
+  budget: { maxBytes: number; quotaLimited: boolean },
+  fetchOpts: Parameters<typeof fetchRemote>[1],
+  foundOnPage?: string,
+): Promise<UploadView> {
+  const cfg = getConfig()
+  if (!cfg.mediaSitesEnabled) throw new AppError('IMPORT_DISABLED', 'YouTube and Spotify links are disabled on this server.')
+
+  let target: string
+  let mode: 'video' | 'audio'
+  let name: string | null = null
+  let page = foundOnPage
+  if (site.kind === 'youtube') {
+    target = site.canonical
+    mode = site.audioOnly ? 'audio' : 'video'
+  } else {
+    const track = parseSpotifyTrackPage(await readHtml(await fetchRemote(site.pageUrl, { ...fetchOpts, maxBytes: MAX_PAGE_BYTES })))
+    if (!track) throw new AppError('REMOTE_FETCH_FAILED', 'The Spotify track details could not be read.')
+    target = spotifySearchQuery(track)
+    mode = 'audio'
+    name = track.artist ? `${track.artist} - ${track.title}` : track.title
+    page = 'open.spotify.com'
+  }
+
+  const outDir = path.join(cfg.scratchDir, `import-${newId('upl')}`)
+  await mkdir(outDir, { recursive: true, mode: 0o700 })
+  try {
+    const result = await downloadWithYtDlp({
+      target,
+      mode,
+      outDir,
+      maxBytes: budget.maxBytes,
+      maxDurationSec: mode === 'video' ? cfg.maxVideoDurationSeconds : cfg.maxDurationSeconds,
+    })
+    const size = (await stat(result.filePath)).size
+    await admit(rt, sessionId, size)
+    return await persist(rt, sessionId, createReadStream(result.filePath), {
+      filename: `${name ?? result.title}${path.extname(result.filePath)}`,
+      declared: size,
+      budget,
+      origin: page ? { kind: 'url', host: 'www.youtube.com', page } : { kind: 'url', host: 'www.youtube.com' },
+    })
+  } finally {
+    await rm(outDir, { recursive: true, force: true })
   }
 }
 
@@ -258,6 +341,7 @@ export function uploadView(rt: RT, u: UploadRecord): UploadView {
     filename: u.originalName,
     sizeBytes: u.sizeBytes,
     origin: u.origin ?? { kind: 'file' },
+    originalUrl: u.status === 'validated' && u.info?.format ? `/api/v1/uploads/${u.id}/download` : null,
     status: u.status,
     extensionFormat,
     createdAt: u.createdAt,
@@ -327,6 +411,74 @@ export async function validateUpload(rt: RT, sessionId: string, uploadId: unknow
     metrics.inc('validations_total', { format: info?.format ?? 'unknown' })
   }
   return uploadView(rt, updated)
+}
+
+/** Reads a page body as text, bounded to MAX_PAGE_BYTES. */
+async function readHtml(pageFile: Awaited<ReturnType<typeof fetchRemote>>): Promise<string> {
+  let html = ''
+  try {
+    for await (const chunk of pageFile.body) {
+      html += (chunk as Buffer).toString('utf8')
+      if (html.length >= MAX_PAGE_BYTES) break
+    }
+  } catch {
+    throw new AppError('REMOTE_FETCH_FAILED', 'The page could not be read completely.')
+  } finally {
+    pageFile.finish()
+    pageFile.body.destroy()
+  }
+  return html
+}
+
+/**
+ * Picks the media a page declares and fetches it under the same SSRF rules,
+ * or hands back a YouTube/Spotify link for the media-site path.
+ */
+async function mediaFromPage(
+  pageFile: Awaited<ReturnType<typeof fetchRemote>>,
+  opts: Parameters<typeof fetchRemote>[1],
+): Promise<{ remote: Awaited<ReturnType<typeof fetchRemote>> } | { site: MediaSite }> {
+  const candidates = findPageMedia(await readHtml(pageFile), pageFile.url).slice(0, 4)
+  if (candidates.length === 0) {
+    throw new AppError('UNSUPPORTED_FORMAT', "This page doesn't contain a downloadable image, video or audio file. Paste a direct link to the file instead.")
+  }
+  let lastError: unknown = null
+  for (const candidate of candidates) {
+    try {
+      // An embedded YouTube video (e.g. og:video) is downloaded through yt-dlp.
+      const site = classifyMediaSite(candidate.url)
+      if (site) return { site }
+      const media = await fetchRemote(candidate.url.href, opts)
+      if (isHtmlContentType(media.contentType)) {
+        // Never follow page → page chains.
+        media.finish()
+        media.body.destroy()
+        continue
+      }
+      return { remote: media }
+    } catch (err) {
+      // e.g. the page points at a streaming service or a private address: try the next candidate.
+      lastError = err
+    }
+  }
+  if (isAppError(lastError) && (lastError.code === 'UNSUPPORTED_SOURCE' || lastError.code === 'URL_NOT_ALLOWED')) throw lastError
+  throw new AppError('UNSUPPORTED_FORMAT', "The media on this page couldn't be downloaded. It may be streamed or protected; try a direct link to the file.")
+}
+
+/**
+ * Serves the original file "as is". Only validated uploads qualify, so the
+ * bytes have passed content inspection and the MIME type comes from what the
+ * file really is, never from the remote server or the browser.
+ */
+export async function downloadOriginal(rt: Pick<Runtime, 'store' | 'storage'>, sessionId: string, uploadId: unknown, req: Request): Promise<Response> {
+  const upload = await getOwnedUpload(rt, sessionId, uploadId)
+  if (upload.status !== 'validated' || !upload.info?.format) {
+    throw new AppError('UPLOAD_NOT_VALIDATED', 'Only files that passed inspection can be downloaded.')
+  }
+  const format = FORMATS[upload.info.format]
+  const served = await serveObject(rt.storage, upload.storageKey, { mime: format.mime, filename: outputFilename(upload.originalName, format.extension) }, req)
+  if (!served) throw new AppError('UPLOAD_EXPIRED', 'This file is no longer available. Please import it again.')
+  return served
 }
 
 /** Deletes an upload's file when no live job still needs it. */

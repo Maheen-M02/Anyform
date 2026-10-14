@@ -30,9 +30,9 @@ describe('parseImportUrl', () => {
     ['https://user:pass@example.com/a.mp4', 'URL_NOT_ALLOWED'],
     ['https://example.com:8443/a.mp4', 'URL_NOT_ALLOWED'],
     ['http://example.com:6379/', 'URL_NOT_ALLOWED'],
-    ['https://www.youtube.com/watch?v=abc', 'UNSUPPORTED_SOURCE'],
-    ['https://youtu.be/abc', 'UNSUPPORTED_SOURCE'],
-    ['https://open.spotify.com/track/abc', 'UNSUPPORTED_SOURCE'],
+    ['https://soundcloud.com/artist/track', 'UNSUPPORTED_SOURCE'],
+    ['https://www.netflix.com/watch/123', 'UNSUPPORTED_SOURCE'],
+    ['https://music.apple.com/us/album/x/1', 'UNSUPPORTED_SOURCE'],
     [`https://example.com/${'a'.repeat(3000)}`, 'INVALID_URL'],
   ])('rejects %s (%s)', (url, code) => {
     expect(() => parseImportUrl(url, policy)).toThrow(expect.objectContaining({ code }))
@@ -43,8 +43,11 @@ describe('parseImportUrl', () => {
     expect(() => parseImportUrl('https://notarchive.org/f.mp3', allow)).toThrow(expect.objectContaining({ code: 'URL_NOT_ALLOWED' }))
   })
   it('recognises streaming hosts only on their domains', () => {
-    expect(isStreamingHost('m.youtube.com')).toBe(true)
-    expect(isStreamingHost('notyoutube.com')).toBe(false)
+    expect(isStreamingHost('m.soundcloud.com')).toBe(true)
+    expect(isStreamingHost('notsoundcloud.com')).toBe(false)
+    // YouTube and Spotify go through the media-site path instead of being refused.
+    expect(isStreamingHost('www.youtube.com')).toBe(false)
+    expect(isStreamingHost('open.spotify.com')).toBe(false)
   })
 })
 

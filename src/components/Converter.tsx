@@ -12,6 +12,8 @@ import { ConversionResult } from './ConversionResult'
 import { ErrorState } from './ErrorState'
 import { FileMetadataCard } from './FileMetadataCard'
 import { FormatSelector } from './FormatSelector'
+import { Reveal } from './motion/Reveal'
+import { PipelineDemo } from './PipelineDemo'
 import { UploadDropzone } from './UploadDropzone'
 import { UrlImport } from './UrlImport'
 import { Button, Panel, Spinner } from './ui'
@@ -23,7 +25,7 @@ function toErrorBody(err: unknown): ApiErrorBody {
   return { code: 'UNKNOWN', message: 'Something went wrong. Please try again.' }
 }
 
-export function Converter() {
+export function Converter({ conversionCount }: { conversionCount: number }) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflow)
   const [settings, setSettings] = useState<ConversionSettings>({ format: null, options: {} })
   const [caps, setCaps] = useState<Capabilities | null>(null)
@@ -188,7 +190,7 @@ export function Converter() {
     <div className="space-y-6">
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         {/* Input column */}
-        <div className="space-y-4">
+        <Reveal className="space-y-4">
           {!hasFile && (
             <>
               <UploadDropzone accepted={accepted} maxBytes={caps?.limits.maxUploadBytes ?? null} onFile={handleFile} disabled={!caps} />
@@ -225,32 +227,33 @@ export function Converter() {
               )}
             </>
           )}
-        </div>
+        </Reveal>
 
         {/* Output column */}
-        <Panel title="Output" aside={choice?.lossy ? <span className="font-mono text-[11px] text-warn">lossy format</span> : undefined}>
+        <Reveal delay={140} className="h-full">
+        <Panel className="h-full" title="Output" aside={choice?.lossy ? <span className="font-mono text-[11px] text-warn">lossy format</span> : undefined}>
           {!upload || upload.outputs.length === 0 ? (
-            <div className="flex min-h-48 flex-col justify-center gap-2 text-sm text-muted">
-              {state.phase === 'validating' || state.phase === 'uploading' ? (
-                <p className="inline-flex items-center gap-2">
-                  <Spinner />{' '}
+            state.phase === 'validating' || state.phase === 'uploading' ? (
+              <div key="working" className="flex min-h-72 animate-fade-in flex-col items-center justify-center gap-4 text-center text-sm text-muted">
+                <span className="relative grid size-12 place-items-center">
+                  <span className="absolute inset-0 animate-ping rounded-full border border-accent/30" />
+                  <Spinner className="size-5 text-accent" />
+                </span>
+                <p>
                   {state.phase === 'validating'
                     ? 'Inspecting the file’s actual contents…'
                     : state.file.source === 'url'
                       ? 'Downloading the file on the server…'
                       : 'Uploading…'}
                 </p>
-              ) : (
-                <>
-                  <p>Output options appear once a file has been checked.</p>
-                  <p className="text-faint">
-                    {caps ? `${caps.conversions.length} conversions across video, audio, images, PDFs and archives.` : '…'}
-                  </p>
-                </>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div key="idle" className="animate-fade-in">
+                <PipelineDemo conversionCount={conversionCount} />
+              </div>
+            )
           ) : (
-            <div className="space-y-6">
+            <div key={state.phase === 'submitting' ? 'ready' : state.phase} className="animate-fade-in space-y-6">
               {(state.phase === 'ready' || state.phase === 'submitting') && (
                 <>
                   <FormatSelector
@@ -306,6 +309,7 @@ export function Converter() {
             </div>
           )}
         </Panel>
+        </Reveal>
       </div>
 
       <ConversionHistory jobs={history} onDelete={deleteJob} />

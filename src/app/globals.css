@@ -20,10 +20,15 @@
 
   --animate-indeterminate: indeterminate 1.4s ease-in-out infinite;
   --animate-fade-in: fade-in 220ms ease-out both;
+  --animate-float: float 3.2s ease-in-out infinite;
 
   @keyframes indeterminate {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(250%); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
   }
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
@@ -60,4 +65,182 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Hero entrance (src/components/hero)
+ * ------------------------------------------------------------------------- */
+
+html.intro-running {
+  overflow: hidden;
+}
+
+/* Reduced-motion users never see the preloader
+   (class set by the inline script in the root layout, before first paint). */
+.intro-skip .intro-overlay {
+  display: none;
+}
+.intro-skip .hero-panel-hidden {
+  clip-path: none;
+}
+
+/* Hidden behind the preloader until it opens out of a dot. */
+.hero-panel-hidden {
+  clip-path: inset(50% 50% 50% 50%);
+}
+
+.digit-collapse {
+  transform-origin: 50% 55%;
+  animation: digit-collapse 460ms cubic-bezier(0.7, 0, 0.3, 1) both;
+}
+@keyframes digit-collapse {
+  0% { transform: scaleX(1); }
+  60% { transform: scaleX(0.22); }
+  100% { transform: scaleX(0); opacity: 0; }
+}
+
+.wordmark-letter {
+  transform: translateY(108%);
+}
+.wordmark-letter-in {
+  animation: letter-in 1000ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes letter-in {
+  from { transform: translateY(108%); }
+  to { transform: translateY(0); }
+}
+
+.hero-chrome {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 700ms ease 650ms, transform 900ms cubic-bezier(0.22, 1, 0.36, 1) 650ms;
+}
+.hero-chrome-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* Generative art: slow colour fields. */
+.hero-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(70px);
+  will-change: transform;
+}
+.hero-blob-a {
+  width: 62vw; height: 62vw; left: -12vw; top: -22vw;
+  background: radial-gradient(circle at 40% 40%, #2b8c7a 0%, #0f3b3a 45%, transparent 70%);
+  animation: drift-a 26s ease-in-out infinite alternate;
+}
+.hero-blob-b {
+  width: 46vw; height: 46vw; right: -6vw; top: 8vh;
+  background: radial-gradient(circle at 50% 50%, #c8f53c 0%, #6f9a17 30%, transparent 68%);
+  opacity: 0.55;
+  animation: drift-b 22s ease-in-out infinite alternate;
+}
+.hero-blob-c {
+  width: 54vw; height: 54vw; left: 26vw; bottom: -30vw;
+  background: radial-gradient(circle at 50% 50%, #3a2c7a 0%, #1a1440 50%, transparent 72%);
+  animation: drift-c 30s ease-in-out infinite alternate;
+}
+.hero-blob-d {
+  width: 22vw; height: 22vw; left: 52vw; top: 34vh;
+  background: radial-gradient(circle, #ff8a3d 0%, #8a3a12 45%, transparent 70%);
+  opacity: 0.45;
+  animation: drift-d 18s ease-in-out infinite alternate;
+}
+@keyframes drift-a { to { transform: translate(10vw, 8vh) scale(1.15); } }
+@keyframes drift-b { to { transform: translate(-14vw, 14vh) scale(0.9); } }
+@keyframes drift-c { to { transform: translate(-12vw, -10vh) scale(1.1); } }
+@keyframes drift-d { to { transform: translate(-18vw, -6vh) scale(1.4); } }
+
+.hero-stream-row,
+.hero-stream-row-rev {
+  animation: stream 90s linear infinite;
+}
+.hero-stream-row-rev {
+  animation-direction: reverse;
+}
+@keyframes stream {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* ---------------------------------------------------------------------------
+ * Section motion: scroll reveals, spotlight surfaces, drop zone, pipeline demo
+ * ------------------------------------------------------------------------- */
+
+/* Hidden only when JavaScript runs (class set in the root layout), so content never disappears without it. */
+.js .reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  filter: blur(6px);
+  transition:
+    opacity 900ms ease,
+    transform 1000ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 900ms ease;
+}
+.js .reveal.reveal-in {
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+.js .reveal-word {
+  transform: translateY(110%);
+  transition: transform 1000ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.js .reveal-word.reveal-word-in {
+  transform: none;
+}
+
+.spotlight {
+  position: relative;
+  isolation: isolate;
+}
+.spotlight::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 50%), rgba(200, 245, 60, 0.08), transparent 45%);
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+.spotlight:hover::before {
+  opacity: 1;
+}
+
+.marching-ants {
+  animation: march 1.6s linear infinite;
+}
+.marching-ants-fast {
+  animation-duration: 0.5s;
+}
+@keyframes march {
+  to { stroke-dashoffset: -28; }
+}
+
+.chip-in {
+  animation: chip-in 600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes chip-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+.pipe-chip-in {
+  animation: pipe-chip-in 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes pipe-chip-in {
+  from { opacity: 0; transform: translateY(10px) rotateX(40deg); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.pipe-beam {
+  animation: pipe-beam 1100ms cubic-bezier(0.65, 0, 0.35, 1) 150ms both;
+}
+@keyframes pipe-beam {
+  from { left: -35%; }
+  to { left: 100%; }
 }

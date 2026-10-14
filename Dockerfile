@@ -16,6 +16,9 @@ FROM node:22-bookworm-slim AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg tini \
  && rm -rf /var/lib/apt/lists/*
+# yt-dlp for YouTube/Spotify links: the standalone release (distribution packages go stale quickly).
+ARG YTDLP_VERSION=2026.08.19
+ADD --chmod=755 https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux /usr/local/bin/yt-dlp
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     ANYFORM_DATA_DIR=/data \

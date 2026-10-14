@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto'
-import { Readable } from 'node:stream'
-import { contentDisposition } from '@/lib/filename'
 import { FORMATS, isFormatId, type FormatId } from '@/lib/formats'
 import { assertJobTransition, isActiveJob, type JobStatus } from '@/lib/states'
 import { getConfig } from '../config'
@@ -9,6 +7,7 @@ import { isId, newId } from '../ids'
 import { logger } from '../logger'
 import type { Runtime } from '../runtime'
 import type { JobRecord } from '../store/types'
+import { serveObject } from './serve'
 import { getOwnedUpload, releaseUpload, sessionUsageBytes } from './uploads'
 
 export interface JobView {
@@ -204,54 +203,13 @@ export async function deleteConversion(rt: Pick<Runtime, 'store' | 'storage'>, s
   await releaseUpload(rt, job.uploadId)
 }
 
-export function parseRange(header: string | null, size: number): { start: number; end: number } | 'invalid' | null {
-  if (!header) return null
-  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
-  if (!m || (m[1] === '' && m[2] === '')) return 'invalid'
-  let start: number
-  let end: number
-  if (m[1] === '') {
-    const suffix = Number(m[2])
-    start = Math.max(0, size - suffix)
-    end = size - 1
-  } else {
-    start = Number(m[1])
-    end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1)
-  }
-  if (start > end || start >= size) return 'invalid'
-  return { start, end }
-}
-
 /** Serves an owned, completed, unexpired output with HTTP range support. */
 export async function downloadConversion(rt: Pick<Runtime, 'store' | 'storage'>, sessionId: string, jobId: unknown, req: Request): Promise<Response> {
   const job = await getOwnedJob(rt, sessionId, jobId)
   const status = effectiveStatus(job)
   if (status === 'expired') throw new AppError('RESULT_EXPIRED', 'This file has expired and was deleted. Convert the original again.')
   if (status !== 'completed' || !job.output) throw new AppError('RESULT_NOT_READY', 'This conversion has not finished.')
-  const obj = await rt.storage.stat(job.output.storageKey)
-  if (!obj) throw new AppError('RESULT_EXPIRED', 'This file is no longer available.')
-
-  const inline = new URL(req.url).searchParams.get('inline') === '1'
-  const headers = new Headers({
-    'content-type': FORMATS[job.output.format].mime,
-    'content-disposition': contentDisposition(job.output.filename, inline ? 'inline' : 'attachment'),
-    'accept-ranges': 'bytes',
-    'cache-control': 'private, no-store',
-    'x-content-type-options': 'nosniff',
-    'content-security-policy': "default-src 'none'; sandbox",
-  })
-  const range = parseRange(req.headers.get('range'), obj.sizeBytes)
-  if (range === 'invalid') {
-    headers.set('content-range', `bytes */${obj.sizeBytes}`)
-    return new Response(null, { status: 416, headers })
-  }
-  const stream = rt.storage.read(job.output.storageKey, range ?? undefined)
-  const body = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>
-  if (range) {
-    headers.set('content-range', `bytes ${range.start}-${range.end}/${obj.sizeBytes}`)
-    headers.set('content-length', String(range.end - range.start + 1))
-    return new Response(body, { status: 206, headers })
-  }
-  headers.set('content-length', String(obj.sizeBytes))
-  return new Response(body, { status: 200, headers })
+  const served = await serveObject(rt.storage, job.output.storageKey, { mime: FORMATS[job.output.format].mime, filename: job.output.filename }, req)
+  if (!served) throw new AppError('RESULT_EXPIRED', 'This file is no longer available.')
+  return served
 }

@@ -68,7 +68,9 @@ export interface Upload {
   id: string
   filename: string
   sizeBytes: number
-  origin: { kind: 'file' } | { kind: 'url'; host: string }
+  origin: { kind: 'file' } | { kind: 'url'; host: string; page?: string }
+  /** Download of the file as-is (after it passed inspection). */
+  originalUrl: string | null
   status: UploadStatus
   extensionFormat: FormatId | null
   expiresAt: number

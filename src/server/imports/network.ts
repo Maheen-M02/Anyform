@@ -68,14 +68,11 @@ export function isPublicAddress(address: string): boolean {
 }
 
 /**
- * Pages of streaming services. These serve players and HTML, not files, and
- * their content is not ours to download, so they get a clear refusal.
+ * Pages of streaming services that ANYFORM does not download from. They serve
+ * players and HTML, not files, so they get a clear refusal.
  */
 const STREAMING_HOSTS = [
-  'youtube.com',
-  'youtu.be',
-  'youtube-nocookie.com',
-  'spotify.com',
+  // YouTube and Spotify are handled by the media-site path (see media-sites.ts), not refused.
   'music.apple.com',
   'soundcloud.com',
   'tidal.com',

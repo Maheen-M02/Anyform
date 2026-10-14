@@ -22,6 +22,9 @@ export interface RemoteFile {
   filename: string
   declaredLength: number | null
   host: string
+  /** Final URL after redirects (used to resolve relative links on pages). */
+  url: URL
+  contentType: string | undefined
   /** Must be called once the body has been consumed (clears the deadline). */
   finish: () => void
   /** True when the overall deadline stopped the transfer. */
@@ -209,6 +212,8 @@ export async function fetchRemote(raw: string, opts: FetchOptions): Promise<Remo
         filename: filenameFrom(url, res.headers['content-disposition']),
         declaredLength,
         host: url.hostname,
+        url,
+        contentType: res.headers['content-type'],
         finish: () => clearTimeout(deadline),
         timedOut: () => timedOut,
       }

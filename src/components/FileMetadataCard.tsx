@@ -83,7 +83,8 @@ export function FileMetadataCard({ file, upload, state }: { file: LocalFile; upl
           <p className="mt-1 font-mono text-xs text-muted">
             {size !== null ? formatBytes(size) : 'size unknown'}
             {claimed && ` · named .${FORMATS[claimed].extension}`}
-            {upload?.origin.kind === 'url' && ` · from ${upload.origin.host}`}
+            {upload?.origin.kind === 'url' &&
+              (upload.origin.page ? ` · found on ${upload.origin.page}` : ` · from ${upload.origin.host}`)}
             {!upload && file.source === 'url' && ' · downloading on the server'}
           </p>
         </div>
@@ -130,6 +131,26 @@ export function FileMetadataCard({ file, upload, state }: { file: LocalFile; upl
             </li>
           ))}
         </ul>
+      )}
+
+      {upload?.originalUrl && info?.format && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+          <p className="text-xs text-muted">
+            {upload.origin.kind === 'url' ? 'Downloaded and checked. Save it as is, or convert it.' : 'Checked and ready to convert.'}
+          </p>
+          {upload.origin.kind === 'url' && (
+            <a
+              href={upload.originalUrl}
+              download={upload.filename}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition-[filter] hover:brightness-110"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M12 4v12m0 0 5-5m-5 5-5-5M5 20h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Download {FORMATS[info.format].label}
+            </a>
+          )}
+        </div>
       )}
 
       {upload?.warnings.map((w) => (

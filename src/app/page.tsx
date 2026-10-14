@@ -1,5 +1,6 @@
 import { Converter } from '@/components/Converter'
-import { Logo } from '@/components/Logo'
+import { Hero } from '@/components/hero/Hero'
+import { Reveal, RevealWords } from '@/components/motion/Reveal'
 import { getConfig } from '@/server/config'
 import { registry } from '@/server/conversions'
 import { FORMAT_KIND_LABELS, FORMATS, type FormatKind } from '@/lib/formats'
@@ -22,31 +23,30 @@ export default function Home() {
       .filter((r) => r.to.length > 0),
   })).filter((g) => g.rows.length > 0)
 
-  return (
-    <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-5 sm:px-8">
-      <header className="flex h-16 items-center justify-between">
-        <Logo />
-        <nav className="flex items-center gap-5 font-mono text-xs text-muted">
-          <a href="#formats" className="hover:text-fg">
-            Formats
-          </a>
-          <a href="#privacy" className="hover:text-fg">
-            Privacy
-          </a>
-        </nav>
-      </header>
+  const conversionCount = matrix.reduce((n, g) => n + g.rows.reduce((m, r) => m + r.to.length, 0), 0)
 
+  return (
+    <>
+      <Hero conversions={conversionCount} formats={inputs.length} />
+    <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-5 sm:px-8">
       <main className="flex-1 pb-20">
-        <section className="pt-12 pb-10 sm:pt-20 sm:pb-14">
-          <p className="font-mono text-xs tracking-[0.2em] text-accent uppercase">Universal file conversion</p>
-          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-balance sm:text-6xl">Everything in. Anything out.</h1>
+        <section id="convert" className="scroll-mt-6 pt-16 pb-10 sm:pt-24 sm:pb-14">
+          <Reveal>
+            <p className="flex items-center gap-3 font-mono text-xs tracking-[0.2em] text-accent uppercase">
+              <span className="inline-block size-1.5 animate-pulse rounded-full bg-accent" aria-hidden />
+              Universal file conversion
+            </p>
+          </Reveal>
+          <RevealWords text="Everything in. Anything out." delay={120} className="mt-4 text-4xl font-semibold tracking-tight text-balance sm:text-6xl" />
+          <Reveal delay={350}>
           <p className="mt-5 max-w-2xl text-base text-pretty text-muted sm:text-lg">
             Video, audio, images, PDFs and archives. Drop a file, pick a format, download the result. ANYFORM inspects what your file really
             contains, offers only the conversions that will work, and verifies every output before you get it.
           </p>
+          </Reveal>
         </section>
 
-        <Converter />
+        <Converter conversionCount={conversionCount} />
 
         <section id="formats" className="mt-20 grid gap-10 border-t border-line pt-12 md:grid-cols-2">
           <div>
@@ -99,5 +99,6 @@ export default function Home() {
         <span>Max {Math.round(cfg.maxUploadBytes / 1024 / 1024)} MB per file</span>
       </footer>
     </div>
+    </>
   )
 }

@@ -52,6 +52,13 @@ const schema = z.object({
   IMPORT_ALLOWED_HOSTS: z.string().default(''),
   /** Test/development only: allow imports from private and loopback addresses. Refused in production. */
   IMPORT_ALLOW_PRIVATE_NETWORKS: bool.default(false),
+  /** YouTube and Spotify links (downloaded through yt-dlp). */
+  MEDIA_SITES_ENABLED: bool.default(true),
+  YTDLP_PATH: z.string().default('yt-dlp'),
+  /** Media-site downloads can be large; they get a longer deadline than plain imports. */
+  MEDIA_SITE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(600),
+  /** Highest video resolution fetched from YouTube. */
+  MEDIA_MAX_HEIGHT: z.coerce.number().int().positive().default(1080),
 
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   JOB_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(2 * 60 * 60),
@@ -123,6 +130,10 @@ function buildConfig(env: NodeJS.ProcessEnv) {
     importMaxRedirects: e.IMPORT_MAX_REDIRECTS,
     importAllowedHosts: e.IMPORT_ALLOWED_HOSTS.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean),
     importAllowPrivateNetworks: e.IMPORT_ALLOW_PRIVATE_NETWORKS,
+    mediaSitesEnabled: e.MEDIA_SITES_ENABLED,
+    ytdlpPath: e.YTDLP_PATH,
+    mediaSiteTimeoutMs: e.MEDIA_SITE_TIMEOUT_SECONDS * 1000,
+    mediaMaxHeight: e.MEDIA_MAX_HEIGHT,
     workerConcurrency: e.WORKER_CONCURRENCY,
     jobTimeoutMs: e.JOB_TIMEOUT_SECONDS * 1000,
     probeTimeoutMs: e.PROBE_TIMEOUT_SECONDS * 1000,

@@ -14,6 +14,13 @@ its contents (never its name), and every output is independently verified before
 | Documents | PDF; all image formats | TXT (text extraction), PNG/JPG (rendered pages, ZIP for all pages); PDF from images | Pages, DPI, page size. PDF author restrictions (no copy/print) are honoured |
 | Archives | ZIP, TAR, TAR.GZ | ZIP, TAR, TAR.GZ | Streamed byte-for-byte; zip-bomb, path-traversal and encryption guards |
 
+**YouTube and Spotify links:** a YouTube video link becomes an MP4 (YouTube Music links become an MP3);
+a Spotify track link becomes an MP3. Spotify's own stream is DRM-protected and is never touched: the
+track's title and artist are read from its public page and the same recording is downloaded from
+YouTube. Both use [yt-dlp](https://github.com/yt-dlp/yt-dlp), restricted to its YouTube extractors so
+it can never fetch arbitrary URLs. Google/Bing image-result links are unwrapped to the real image.
+Requires `yt-dlp` on PATH (or `YTDLP_PATH`); the Docker image includes it.
+
 **Import from a link:** besides uploading, users can paste a direct link to a file. The server
 downloads it with SSRF protections and runs it through the same pipeline. Streaming services
 (YouTube, Spotify, …) are refused with an explanation: ANYFORM only fetches files that a link serves

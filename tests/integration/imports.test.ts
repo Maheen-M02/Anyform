@@ -3,6 +3,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import * as imports from '@/app/api/v1/imports/route'
+import * as original from '@/app/api/v1/uploads/[id]/download/route'
 import { resetConfig } from '@/server/config'
 import type { UploadView } from '@/server/services/uploads'
 import { convertOk, TestClient } from '../helpers/client'
@@ -16,6 +17,7 @@ beforeAll(async () => {
   await ensureFixtures()
   const video = readFileSync(fixture('clip.mov'))
   const pdf = readFileSync(fixture('text.pdf'))
+  const png = readFileSync(fixture('alpha.png'))
   server = http.createServer((req, res) => {
     const url = new URL(req.url!, 'http://x')
     switch (url.pathname) {
@@ -43,6 +45,26 @@ beforeAll(async () => {
       case '/page.html':
         res.writeHead(200, { 'content-type': 'text/html' })
         return res.end('<!doctype html><html><body>Not a file</body></html>')
+      case '/article':
+        // A page whose main media is a video (plus a thumbnail image).
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        return res.end('<html><head><meta property="og:image" content="/media/thumb.png"><meta property="og:video" content="/media/Holiday%20clip.mov"></head></html>')
+      case '/photo':
+        res.writeHead(200, { 'content-type': 'text/html' })
+        return res.end('<html><head><meta property="og:image" content="media/thumb.png"></head><body><h1>Photo</h1></body></html>')
+      case '/watch-page':
+        // Video hosted on a streaming service ANYFORM does not download from, image hosted locally.
+        res.writeHead(200, { 'content-type': 'text/html' })
+        return res.end('<meta property="og:video" content="https://soundcloud.com/a/b"><meta property="og:image" content="/media/thumb.png">')
+      case '/only-streaming':
+        res.writeHead(200, { 'content-type': 'text/html' })
+        return res.end('<meta property="og:video" content="https://soundcloud.com/a/b">')
+      case '/page-to-page':
+        res.writeHead(200, { 'content-type': 'text/html' })
+        return res.end('<meta property="og:video" content="/article">')
+      case '/media/thumb.png':
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        return res.end(png)
       case '/huge':
         res.writeHead(200, { 'content-length': String(10 * 1024 * 1024 * 1024) })
         return res.end()
@@ -78,6 +100,13 @@ afterEach(() => {
   for (const k of ['IMPORT_ALLOW_PRIVATE_NETWORKS', 'IMPORT_ALLOWED_HOSTS', 'IMPORT_TIMEOUT_SECONDS', 'MAX_UPLOAD_MB', 'IMPORT_ENABLED']) delete process.env[k]
   resetConfig()
 })
+
+async function downloadOriginal(client: TestClient, id: string) {
+  const req = new Request(`http://localhost:3000/api/v1/uploads/${id}/download`, {
+    headers: { host: 'localhost:3000', ...(client.cookie ? { cookie: client.cookie } : {}) },
+  })
+  return original.GET(req, { params: Promise.resolve({ id }) })
+}
 
 async function importUrl(client: TestClient, url: string) {
   const req = new Request('http://localhost:3000/api/v1/imports', {
@@ -121,7 +150,9 @@ describe('URL import (local test server, private networks allowed for the test)'
     ['/missing', 'REMOTE_FETCH_FAILED', /404/],
     ['/loop', 'REMOTE_FETCH_FAILED', /redirected too many times/],
     ['/to-file', 'INVALID_URL', /http/],
-    ['/page.html', 'UNSUPPORTED_FORMAT', /web page/],
+    ['/page.html', 'UNSUPPORTED_FORMAT', /doesn't contain a downloadable/],
+    ['/only-streaming', 'UNSUPPORTED_SOURCE', /streaming services/],
+    ['/page-to-page', 'UNSUPPORTED_FORMAT', /couldn't be downloaded/],
     ['/huge', 'UPLOAD_TOO_LARGE', /limit/],
     ['/short', 'REMOTE_FETCH_FAILED', /interrupted|closed the connection/],
   ])('%s → %s', async (path, code, message) => {
@@ -158,6 +189,53 @@ describe('URL import (local test server, private networks allowed for the test)'
   })
 })
 
+describe('pasting a page link downloads its media', () => {
+  it('downloads the video declared by an article page', async () => {
+    setEnv({ IMPORT_ALLOW_PRIVATE_NETWORKS: 'true' })
+    const client = new TestClient()
+    const { status, body } = await importUrl(client, `${base}/article`)
+    expect(status).toBe(201)
+    expect(body.upload.filename).toBe('Holiday clip.mov')
+    expect(body.upload.origin).toEqual({ kind: 'url', host: '127.0.0.1', page: '127.0.0.1' })
+    const v = await client.validate(body.upload.id)
+    expect(v.body.upload.info?.format).toBe('mov')
+  })
+
+  it('downloads the image of a photo page (relative link)', async () => {
+    setEnv({ IMPORT_ALLOW_PRIVATE_NETWORKS: 'true' })
+    const client = new TestClient()
+    const { body } = await importUrl(client, `${base}/photo`)
+    expect(body.upload.filename).toBe('thumb.png')
+    expect((await client.validate(body.upload.id)).body.upload.info?.format).toBe('png')
+  })
+
+  it('skips media on streaming services and falls back to the next candidate', async () => {
+    setEnv({ IMPORT_ALLOW_PRIVATE_NETWORKS: 'true' })
+    const { body } = await importUrl(new TestClient(), `${base}/watch-page`)
+    expect(body.upload.filename).toBe('thumb.png')
+  })
+})
+
+describe('downloading the original file as is', () => {
+  it('serves validated imports byte-for-byte to their owner only', async () => {
+    setEnv({ IMPORT_ALLOW_PRIVATE_NETWORKS: 'true' })
+    const client = new TestClient()
+    const { body } = await importUrl(client, `${base}/media/Holiday%20clip.mov`)
+    expect(body.upload.originalUrl).toBeNull() // not inspected yet
+    expect((await downloadOriginal(client, body.upload.id)).status).toBe(409)
+
+    const v = await client.validate(body.upload.id)
+    expect(v.body.upload.originalUrl).toBe(`/api/v1/uploads/${body.upload.id}/download`)
+    const res = await downloadOriginal(client, body.upload.id)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('video/quicktime')
+    expect(res.headers.get('content-disposition')).toContain('Holiday clip.mov')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(readFileSync(fixture('clip.mov')))
+
+    expect((await downloadOriginal(new TestClient(), body.upload.id)).status).toBe(404)
+  })
+})
+
 describe('URL import with default (production) policy', () => {
   it.each(['/media/Holiday%20clip.mov', '/download'])('refuses the loopback server for %s', async (path) => {
     const { body } = await importUrl(new TestClient(), `${base}${path}`)
@@ -172,7 +250,7 @@ describe('URL import with default (production) policy', () => {
   })
 
   it('explains that streaming services are not supported', async () => {
-    const { status, body } = await importUrl(new TestClient(), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+    const { status, body } = await importUrl(new TestClient(), 'https://soundcloud.com/artist/track')
     expect(status).toBe(422)
     expect(body.error?.code).toBe('UNSUPPORTED_SOURCE')
     expect(body.error?.message).toMatch(/streaming services/)

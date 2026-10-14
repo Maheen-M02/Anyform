@@ -15,7 +15,7 @@ export interface UploadRecord {
   sizeBytes: number
   storageKey: string
   /** Absent on records created before URL import existed. */
-  origin?: { kind: 'file' } | { kind: 'url'; host: string }
+  origin?: { kind: 'file' } | { kind: 'url'; host: string; /** Host of the page the media was found on. */ page?: string }
   status: UploadStatus
   info: FileInfo | null
   error: StoredError | null
