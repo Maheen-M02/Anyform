@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { findDestination } from '@/lib/destinations'
 import { FORMATS, isFormatId, type FormatId } from '@/lib/formats'
 import { assertJobTransition, isActiveJob, type JobStatus } from '@/lib/states'
 import { getConfig } from '../config'
@@ -6,7 +7,7 @@ import { AppError } from '../errors'
 import { isId, newId } from '../ids'
 import { logger } from '../logger'
 import type { Runtime } from '../runtime'
-import type { JobRecord } from '../store/types'
+import type { JobRecord, VerificationReport } from '../store/types'
 import { serveObject } from './serve'
 import { getOwnedUpload, releaseUpload, sessionUsageBytes } from './uploads'
 
@@ -20,12 +21,14 @@ export interface JobView {
   outputFormat: FormatId
   options: Record<string, unknown>
   error: { code: string; message: string } | null
+  destination: string | null
   output: {
     filename: string
     format: FormatId
     sizeBytes: number
     durationSec: number | null
     details: Record<string, string | number>
+    report: VerificationReport | null
   } | null
   downloadUrl: string | null
   previewUrl: string | null
@@ -54,6 +57,7 @@ export function jobView(job: JobRecord): JobView {
     inputFormat: job.inputFormat,
     outputFormat: job.outputFormat,
     options: job.options,
+    destination: job.destination ?? null,
     error: job.error,
     output: available && job.output
       ? {
@@ -62,6 +66,7 @@ export function jobView(job: JobRecord): JobView {
           sizeBytes: job.output.sizeBytes,
           durationSec: job.output.durationSec,
           details: job.output.details,
+          report: job.output.report ?? null,
         }
       : null,
     downloadUrl: available ? base : null,
@@ -88,6 +93,8 @@ export interface CreateConversionInput {
   uploadId: string
   outputFormat: string
   options?: Record<string, unknown>
+  /** Destination preset the settings came from; only recorded for the report. */
+  destination?: string
 }
 
 export async function createConversion(rt: Runtime, sessionId: string, input: CreateConversionInput): Promise<{ job: JobView; created: boolean }> {
@@ -110,9 +117,13 @@ export async function createConversion(rt: Runtime, sessionId: string, input: Cr
   // For single-step plans the final adapter sees the real input; for chains we
   // can only fully validate options once the intermediate file exists.
   const options = plan.steps.length === 1 ? last.validateOptions(input.options ?? {}, info) : (input.options ?? {})
+  if (input.destination !== undefined && !findDestination(input.destination)) {
+    throw new AppError('INVALID_OPTIONS', 'Unknown destination.')
+  }
+  const destination = input.destination ?? null
 
   const sessionJobs = await rt.store.listJobsForSession(sessionId)
-  const dedupeKey = createHash('sha256').update(stableJson({ u: upload.id, f: outputFormat, o: options })).digest('hex').slice(0, 32)
+  const dedupeKey = createHash('sha256').update(stableJson({ u: upload.id, f: outputFormat, o: options, d: destination })).digest('hex').slice(0, 32)
   const duplicate = sessionJobs.find((j) => j.dedupeKey === dedupeKey && (isActiveJob(j.status) || effectiveStatus(j) === 'completed'))
   if (duplicate) return { job: jobView(duplicate), created: false }
 
@@ -136,6 +147,7 @@ export async function createConversion(rt: Runtime, sessionId: string, input: Cr
     outputFormat,
     adapterIds: plan.steps.map((s) => s.id),
     options,
+    destination,
     dedupeKey,
     status: 'queued',
     progress: null,

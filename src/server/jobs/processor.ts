@@ -14,6 +14,7 @@ import { metrics } from '../metrics'
 import { storageKey, type StorageDriver } from '../storage'
 import type { JobRecord, MetaStore } from '../store/types'
 import type { JobQueue } from './queue'
+import { buildReport } from './report'
 
 export interface ProcessorDeps {
   store: MetaStore
@@ -96,7 +97,8 @@ export async function processJob(deps: ProcessorDeps, jobId: string): Promise<vo
     })
 
     await mkdir(scratch, { recursive: true, mode: 0o700 })
-    let inputPath = await storage.localPath(upload.storageKey)
+    const sourcePath = await storage.localPath(upload.storageKey)
+    let inputPath = sourcePath
     let info: FileInfo = upload.info
     let lastProgressWrite = 0
 
@@ -143,6 +145,9 @@ export async function processJob(deps: ProcessorDeps, jobId: string): Promise<vo
           timeoutMs: Math.max(1000, cfg.jobTimeoutMs - (Date.now() - started)),
         })
         if (controller.signal.aborted) throw new CancelledError()
+        const filename = outputFilename(claimed.inputName, FORMATS[verified.format].extension)
+        const report = await buildReport({ job: claimed, upload, verified, sourcePath, outputPath: outPath, outputName: filename, signal: controller.signal })
+        if (controller.signal.aborted) throw new CancelledError()
 
         outputKey = storageKey('outputs', newId('out'))
         const { sizeBytes } = await storage.importFile(outputKey, outPath)
@@ -154,11 +159,12 @@ export async function processJob(deps: ProcessorDeps, jobId: string): Promise<vo
             expiresAt: finishedAt + cfg.resultTtlMs,
             output: {
               storageKey: outputKey!,
-              filename: outputFilename(j.inputName, FORMATS[verified.format].extension),
+              filename,
               format: verified.format,
               sizeBytes,
               durationSec: verified.durationSec,
               details: verified.details,
+              report,
             },
           }),
         )

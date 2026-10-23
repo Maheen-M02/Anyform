@@ -64,7 +64,8 @@ describe('upload validation', () => {
     const client = new TestClient()
     const { upload } = await client.prepare(fixture('video-only.mp4'))
     expect(upload!.status).toBe('validated')
-    expect(upload!.outputs.map((o) => o.format)).toEqual(['webm'])
+    // The same-format clean copy comes after the real conversions.
+    expect(upload!.outputs.map((o) => o.format)).toEqual(['webm', 'mp4'])
     const { res, body } = await client.convert({ uploadId: upload!.id, outputFormat: 'mp3' })
     expect(res.status).toBe(422)
     expect(body.error?.code).toBe('NO_AUDIO_STREAM')

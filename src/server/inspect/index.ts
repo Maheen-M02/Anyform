@@ -4,7 +4,8 @@ import { AppError } from '../errors'
 import { canDecodeStream, probeMedia } from '../media/probe'
 import { FAMILY_KIND, readHead, sniffBytes, type ContainerFamily } from '../media/sniff'
 import { runSandbox } from '../sandbox'
-import type { ArchiveInfo, FileInfo, ImageInfo, PdfInfo } from './types'
+import { avHidden } from './hidden'
+import type { ArchiveInfo, FileInfo, HiddenItem, ImageInfo, PdfInfo } from './types'
 
 export type { FileInfo } from './types'
 
@@ -35,15 +36,15 @@ export async function inspectFile(filePath: string, opts: { signal?: AbortSignal
         const video = media.videoStreams.find((v) => !v.isAttachedPicture)
         if (video) video.decodable = await canDecodeStream(filePath, family, video.index, opts.signal, 2)
       }
-      return { kind: 'av', family, format: media.format, sizeBytes, media }
+      return { kind: 'av', family, format: media.format, sizeBytes, media, hidden: avHidden(media.tags ?? []) }
     }
     case 'image': {
-      const image = await runSandbox<ImageInfo>('inspect-image', { path: filePath, maxPixels: cfg.maxImagePixels }, sandbox)
-      return { kind: 'image', family, format: image.format, sizeBytes, image }
+      const { hidden, ...image } = await runSandbox<ImageInfo & { hidden: HiddenItem[] }>('inspect-image', { path: filePath, maxPixels: cfg.maxImagePixels }, sandbox)
+      return { kind: 'image', family, format: image.format, sizeBytes, image, hidden }
     }
     case 'pdf': {
-      const pdf = await runSandbox<PdfInfo>('inspect-pdf', { path: filePath, maxPages: cfg.maxPdfPages }, sandbox)
-      return { kind: 'pdf', family, format: 'pdf', sizeBytes, pdf }
+      const { hidden, ...pdf } = await runSandbox<PdfInfo & { hidden: HiddenItem[] }>('inspect-pdf', { path: filePath, maxPages: cfg.maxPdfPages }, sandbox)
+      return { kind: 'pdf', family, format: 'pdf', sizeBytes, pdf, hidden }
     }
     case 'archive': {
       const archive = await runSandbox<ArchiveInfo>(
@@ -51,7 +52,7 @@ export async function inspectFile(filePath: string, opts: { signal?: AbortSignal
         { path: filePath, family: family as Extract<ContainerFamily, 'zip' | 'gzip' | 'tar'>, limits: archiveLimits() },
         sandbox,
       )
-      return { kind: 'archive', family, format: archive.format, sizeBytes, archive }
+      return { kind: 'archive', family, format: archive.format, sizeBytes, archive, hidden: [] }
     }
   }
 }

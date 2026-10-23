@@ -1,12 +1,13 @@
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
-import { AUDIO_FORMATS, FORMATS, VIDEO_FORMATS } from '@/lib/formats'
+import { AUDIO_FORMATS, FORMATS, formatDuration, VIDEO_FORMATS } from '@/lib/formats'
+import { formatTarget, MB, MIN_MP3_KBPS, mp3BitrateFor } from '@/lib/size-targets'
 import { getConfig } from '../../config'
 import { AppError } from '../../errors'
 import { canDecodeStream, inputGuardArgs, probeMedia, type AudioStreamInfo, type MediaInfo } from '../../media/probe'
 import { ToolError } from '../../media/process'
 import type { ContainerFamily } from '../../media/sniff'
-import type { ConversionAdapter, OptionField } from '../types'
+import type { ConversionAdapter, OptionField, VerificationCheck } from '../types'
 import {
   audioStreamOrThrow,
   defaultAudioStream,
@@ -31,6 +32,24 @@ export interface AudioOptions {
   streamIndex: number
   bitrate?: number
   bitDepth?: 16 | 24
+  /** MP3 only: upper bound for the output size; the bitrate is lowered (never raised) to fit. */
+  maxBytes?: number | null
+}
+
+/** Size targets offered in the UI for MP3 (the API accepts any value in range). */
+export const AUDIO_SIZE_TARGETS = [5, 8, 10, 16, 25].map((n) => n * MB)
+
+/** The bitrate actually encoded: the chosen one, or the largest lower one that fits the size target. */
+export function effectiveBitrate(options: AudioOptions, durationSec: number | null): number | undefined {
+  if (!options.maxBytes || options.bitrate === undefined) return options.bitrate
+  const kbps = mp3BitrateFor(durationSec ?? 0, options.maxBytes, options.bitrate)
+  if (kbps === null) {
+    throw new AppError(
+      'SIZE_TARGET_UNREACHABLE',
+      `${formatDuration(durationSec)} of audio can't fit in ${formatTarget(options.maxBytes)}, even at ${MIN_MP3_KBPS} kbps. Choose a larger size.`,
+    )
+  }
+  return kbps
 }
 
 interface OutputSpec {
@@ -165,6 +184,10 @@ export function createAudioAdapter(output: AudioOutput): ConversionAdapter<Audio
             .default(16)
         : z.never().optional(),
       streamIndex: z.coerce.number().int().nonnegative().optional(),
+      maxBytes:
+        output === 'mp3'
+          ? z.union([z.literal('none'), z.null(), z.coerce.number().int().min(100_000).max(10_000 * MB)]).default('none')
+          : z.never().optional(),
     })
     .strict()
 
@@ -209,6 +232,16 @@ export function createAudioAdapter(output: AudioOutput): ConversionAdapter<Audio
           help: '16-bit is CD quality; 24-bit preserves high-resolution sources.',
         })
       }
+      if (output === 'mp3') {
+        fields.push({
+          key: 'maxBytes',
+          label: 'Max file size',
+          type: 'select',
+          choices: [{ value: 'none', label: 'No limit' }, ...AUDIO_SIZE_TARGETS.map((b) => ({ value: b, label: formatTarget(b) }))],
+          default: 'none',
+          help: 'Lowers the bitrate only as far as needed to fit.',
+        })
+      }
       if (!info || (info.kind === 'av' && info.media.audioStreams.length > 1)) {
         fields.push({ key: 'streamIndex', label: 'Audio track', type: 'audioStream', help: 'This file has several audio tracks.' })
       }
@@ -232,6 +265,11 @@ export function createAudioAdapter(output: AudioOutput): ConversionAdapter<Audio
       const options: AudioOptions = { streamIndex }
       if (parsed.data.bitrate !== undefined) options.bitrate = parsed.data.bitrate
       if (parsed.data.bitDepth !== undefined) options.bitDepth = parsed.data.bitDepth as 16 | 24
+      if (parsed.data.maxBytes !== undefined) {
+        options.maxBytes = parsed.data.maxBytes === 'none' ? null : (parsed.data.maxBytes as number | null)
+        // Refuse unreachable size targets before any work is queued.
+        effectiveBitrate(options, expectedDuration(media, audioStreamOrThrow(media, streamIndex)))
+      }
       return options
     },
 
@@ -241,7 +279,8 @@ export function createAudioAdapter(output: AudioOutput): ConversionAdapter<Audio
       const seconds = expectedDuration(media, stream) ?? 0
       const channels = Math.min(stream.channels, spec.maxChannels)
       const pcmBytes = seconds * (spec.sampleRate(stream.sampleRate) ?? stream.sampleRate) * channels * ((options.bitDepth ?? 16) / 8)
-      const outputBytes = options.bitrate ? (seconds * options.bitrate * 1000) / 8 : output === 'flac' ? pcmBytes * 0.8 : pcmBytes
+      const bitrate = effectiveBitrate(options, seconds)
+      const outputBytes = bitrate ? (seconds * bitrate * 1000) / 8 : output === 'flac' ? pcmBytes * 0.8 : pcmBytes
       return { outputBytes: Math.ceil(outputBytes * 1.05) + 64 * 1024, cpuSeconds: seconds / 40 }
     },
 
@@ -254,7 +293,7 @@ export function createAudioAdapter(output: AudioOutput): ConversionAdapter<Audio
         outputPath: ctx.outputPath,
         media,
         stream,
-        options: ctx.options,
+        options: { ...ctx.options, bitrate: effectiveBitrate(ctx.options, expectedDuration(media, stream)) },
         threads: getConfig().ffmpegThreads,
       })
       await runFfmpeg(args, { ...ctx, totalSec: expectedDuration(media, stream), adapterId: id })
@@ -284,15 +323,26 @@ export function createAudioAdapter(output: AudioOutput): ConversionAdapter<Audio
       if (expected !== null && Math.abs(actual - expected) > durationTolerance(expected)) {
         throw new AppError('CORRUPT_MEDIA', 'Only part of the audio could be converted. The source file appears to be truncated or damaged.')
       }
-      if (spec.verifyBitrate && ctx.options.bitrate) {
+      const bitrate = effectiveBitrate(ctx.options, expected)
+      const checks: VerificationCheck[] = [
+        { label: 'Container', detail: `Re-read with ffprobe: ${label}, exactly one ${outStream.codec} stream and no video` },
+        { label: 'Playback', detail: 'The first 10 seconds decoded without errors' },
+        { label: 'Duration', detail: `${actual.toFixed(2)} s against ${expected?.toFixed(2) ?? '?'} s in the source` },
+      ]
+      if (spec.verifyBitrate && bitrate) {
         const bitRate = outStream.bitRate ?? out.bitRate
-        const target = ctx.options.bitrate * 1000
+        const target = bitrate * 1000
         if (bitRate !== null && Math.abs(bitRate - target) / target > 0.03) throw verificationError(id, `bitrate ${bitRate} != ${target}`)
+        checks.push({ label: 'Bitrate', detail: `${Math.round((bitRate ?? target) / 1000)} kbps constant, as requested` })
+      }
+      if (ctx.options.maxBytes) {
+        if (size > ctx.options.maxBytes) throw verificationError(id, `size ${size} > ${ctx.options.maxBytes}`)
+        checks.push({ label: 'Size limit', detail: `${size.toLocaleString('en-US')} bytes, under the ${formatTarget(ctx.options.maxBytes)} limit` })
       }
       const details: Record<string, string | number> = { sampleRate: outStream.sampleRate, channels: outStream.channels }
-      if (ctx.options.bitrate) details[spec.verifyBitrate ? 'bitrateKbps' : 'targetKbps'] = ctx.options.bitrate
+      if (bitrate) details[spec.verifyBitrate ? 'bitrateKbps' : 'targetKbps'] = bitrate
       if (ctx.options.bitDepth) details.bitDepth = ctx.options.bitDepth
-      return { format: output, sizeBytes: size, durationSec: actual, details }
+      return { format: output, sizeBytes: size, durationSec: actual, details, checks }
     },
   }
 }

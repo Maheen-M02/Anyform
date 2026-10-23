@@ -48,6 +48,8 @@ const AV_RECIPES: Record<string, string[]> = {
   'tone.mp3': [...sine(523, 44100), '-t', '2', '-c:a', 'libmp3lame', '-b:a', '128k'],
   // Animated GIF (10 frames) for animation-preserving conversions.
   'animated.gif': [...video('80x60'), '-frames:v', '10'],
+  // Phone-style location and title tags, for the hidden-data scan and clean copies.
+  'located.mp4': [...video(), ...sine(440), '-t', '2', ...h264, '-c:a', 'aac', '-shortest', '-metadata', 'location=+48.8584+002.2945/', '-metadata', 'title=Holiday'],
 }
 
 export function fixture(name: string): string {
@@ -130,7 +132,35 @@ async function generate(): Promise<void> {
     writeFileSync(out, png)
   })
 
+  await make('gps.jpg', async (out) =>
+    void (await sharp({ create: { width: 320, height: 200, channels: 3, background: '#486' } })
+      .jpeg()
+      .withExif({
+        IFD0: { Make: 'Canon', Model: 'EOS R5', Artist: 'Jane Doe' },
+        IFD2: { BodySerialNumber: '0123456789' },
+        IFD3: { GPSLatitudeRef: 'N', GPSLatitude: '48/1 51/1 3024/100', GPSLongitudeRef: 'E', GPSLongitude: '2/1 17/1 4020/100' },
+      })
+      .toFile(out)),
+  )
+  // Random noise barely compresses, so size targets must really work for it.
+  await make('noise.png', async (out) => {
+    const pixels = Buffer.alloc(800 * 600 * 3)
+    for (let i = 0, x = 12345; i < pixels.length; i++) pixels[i] = (x = (x * 1103515245 + 12345) & 0x7fffffff) >> 16
+    await sharp(pixels, { raw: { width: 800, height: 600, channels: 3 } }).png().toFile(out)
+  })
+
   // --- PDFs -----------------------------------------------------------------
+  await make('authored.pdf', async (out) => {
+    const doc = await PDFDocument.create()
+    const font = await doc.embedFont(StandardFonts.Helvetica)
+    for (let i = 1; i <= 2; i++) doc.addPage([612, 792]).drawText(`Contract draft, page ${i}`, { x: 72, y: 700, size: 18, font })
+    doc.setAuthor('Jane Doe')
+    doc.setCreator('Microsoft Word')
+    doc.setProducer('Acrobat Distiller')
+    doc.setKeywords(['confidential'])
+    // A trailing second "%%EOF" is how an incrementally saved (edited) PDF ends.
+    writeFileSync(out, Buffer.concat([Buffer.from(await doc.save()), Buffer.from('\n% edited\n%%EOF\n')]))
+  })
   await make('text.pdf', async (out) => {
     const doc = await PDFDocument.create()
     const font = await doc.embedFont(StandardFonts.Helvetica)

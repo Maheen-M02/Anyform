@@ -35,6 +35,12 @@ export interface VerifyContext<O> {
   timeoutMs: number
 }
 
+/** One independent check that the output passed (failed checks throw instead). */
+export interface VerificationCheck {
+  label: string
+  detail: string
+}
+
 export interface VerifiedOutput {
   /** Actual format produced (may differ from the plan target, e.g. a ZIP of rendered pages). */
   format: FormatId
@@ -42,6 +48,8 @@ export interface VerifiedOutput {
   durationSec: number | null
   /** Facts about the output shown to the user (bitrate, dimensions, pages…). */
   details: Record<string, string | number>
+  /** What was checked, in order, for the verification report. */
+  checks: VerificationCheck[]
 }
 
 export interface ResourceEstimate {

@@ -13,7 +13,7 @@
 import { convertArchive, inspectArchive } from './archives'
 import { SandboxError } from './errors'
 import { convertImage, inspectImage } from './images'
-import { countPdfPages, imagesToPdf, inspectPdf, pdfToImages, pdfToText } from './pdf'
+import { cleanPdf, countPdfPages, imagesToPdf, inspectPdf, pdfToImages, pdfToText } from './pdf'
 
 const out = process.stdout.write.bind(process.stdout)
 for (const method of ['log', 'info', 'warn', 'debug'] as const) {
@@ -31,6 +31,7 @@ const OPS: Record<string, (args: any) => Promise<unknown>> = {
   'pdf-to-text': (a) => pdfToText(a.input, a.output, progress),
   'pdf-to-images': (a) => pdfToImages(a, progress),
   'images-to-pdf': (a) => imagesToPdf(a, progress),
+  'clean-pdf': (a) => cleanPdf(a),
   'inspect-archive': (a) => inspectArchive(a.path, a.family, a.limits),
   'convert-archive': (a) => convertArchive(a, progress),
 }

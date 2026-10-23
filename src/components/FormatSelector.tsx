@@ -40,7 +40,9 @@ export function FormatSelector({
                   <input type="radio" name="output-format" className="sr-only" checked={selected} onChange={() => onChange(c.format)} />
                   <span className="min-w-0">
                     <span className="block font-mono text-sm font-semibold tracking-wider">{c.label}</span>
-                    <span className="block truncate text-[11px] text-muted">{c.sameFormat ? 'Resize / re-encode' : FORMATS[c.format].description}</span>
+                    <span className="block truncate text-[11px] text-muted">
+                      {!c.sameFormat ? FORMATS[c.format].description : c.kind === 'image' ? 'Resize / re-encode' : 'Clean copy, no hidden data'}
+                    </span>
                   </span>
                   {c.lossy && <Tag tone="warn">Lossy</Tag>}
                 </label>

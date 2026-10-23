@@ -22,7 +22,7 @@ describe('PDF', () => {
   it('is inspected for pages, title and permissions', async () => {
     const { upload } = await new TestClient().prepare(fixture('text.pdf'))
     expect(upload!.info).toMatchObject({ kind: 'pdf', format: 'pdf', pdf: { pages: 3, title: 'ANYFORM fixture', permissions: { copy: true, print: true } } })
-    expect(upload!.outputs.map((o) => o.format).sort()).toEqual(['jpg', 'png', 'txt'])
+    expect(upload!.outputs.map((o) => o.format).sort()).toEqual(['jpg', 'pdf', 'png', 'txt'])
   })
 
   it('PDF → TXT extracts the text of every page', async () => {

@@ -1,4 +1,5 @@
 import type { ApiErrorBody, Job, Upload } from './api'
+import type { DestinationInput, DestinationTarget } from './destinations'
 import type { FormatId } from './formats'
 
 /** Facts about the locally selected file, known before any upload. */
@@ -97,13 +98,58 @@ export function workflowReducer(state: Workflow, event: WorkflowEvent): Workflow
 export interface ConversionSettings {
   format: FormatId | null
   options: Record<string, number | string>
+  /** Destination preset the settings came from; cleared as soon as they are edited by hand. */
+  destination: string | null
 }
 
 /** Default settings for a freshly validated upload. */
 export function defaultSettings(upload: Upload): ConversionSettings {
   const first = upload.outputs[0]
-  if (!first) return { format: null, options: {} }
-  return { format: first.format, options: defaultOptions(upload, first.format) }
+  if (!first) return { format: null, options: {}, destination: null }
+  return { format: first.format, options: defaultOptions(upload, first.format), destination: null }
+}
+
+/** Settings for a destination target: the format's defaults overridden by the preset. */
+export function destinationSettings(upload: Upload, id: string, target: DestinationTarget): ConversionSettings {
+  return { format: target.format, options: { ...defaultOptions(upload, target.format), ...target.options }, destination: id }
+}
+
+/** What destinations need to know about an upload, or null for files they do not apply to. */
+export function destinationInput(upload: Upload): DestinationInput | null {
+  const info = upload.info
+  if (!info) return null
+  switch (info.kind) {
+    case 'av': {
+      const hasVideo = info.media.videoStreams.some((v) => !v.isAttachedPicture)
+      return {
+        kind: hasVideo ? 'video' : 'audio',
+        durationSec: info.media.durationSec,
+        hasAudio: info.media.audioStreams.some((s) => s.decodable !== false),
+        hasAlpha: false,
+        animated: false,
+      }
+    }
+    case 'image':
+      return { kind: 'image', durationSec: null, hasAudio: false, hasAlpha: info.image.hasAlpha, animated: info.image.frames > 1 && (info.image.format === 'gif' || info.image.format === 'webp') }
+    case 'pdf':
+      return { kind: 'pdf', durationSec: null, hasAudio: false, hasAlpha: false, animated: false }
+    case 'archive':
+      return null
+  }
+}
+
+/**
+ * The output that removes hidden data while keeping the file as it is: a
+ * clean copy for audio/video/PDF, a same-format re-save for images.
+ */
+export function cleanSettings(upload: Upload): ConversionSettings | null {
+  const choice =
+    upload.outputs.find((o) => o.adapterIds[0]?.startsWith('clean-')) ??
+    (upload.info?.kind === 'image' ? upload.outputs.find((o) => o.sameFormat) : undefined)
+  if (!choice) return null
+  const options = defaultOptions(upload, choice.format)
+  if (choice.options.some((f) => f.key === 'quality')) options.quality = 'high'
+  return { format: choice.format, options, destination: null }
 }
 
 export function defaultOptions(upload: Upload, format: FormatId): Record<string, number | string> {

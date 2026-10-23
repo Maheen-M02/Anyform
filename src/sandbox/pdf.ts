@@ -4,11 +4,13 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { createCanvas } from '@napi-rs/canvas'
-import { PDFDocument } from 'pdf-lib'
+import { EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName, type PDFObject, PDFRef, PDFStream } from 'pdf-lib'
 import sharp from 'sharp'
 import yazl from 'yazl'
-import type { PdfInfo } from '../server/inspect/types'
+import { dedupeHidden, formatPdfDate, hiddenItem, sortHidden } from '../server/inspect/hidden'
+import type { HiddenItem, PdfInfo } from '../server/inspect/types'
 import { SandboxError, type Progress } from './errors'
+import { xmpHidden } from './exif'
 import { frameForPdf } from './images'
 
 type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs')
@@ -30,9 +32,11 @@ function assetDir(sub: string): string {
  * Opens a PDF with font loading, XFA and network access disabled (pdf.js 6
  * has no eval-based code paths). `close` releases the document.
  */
-async function open(file: string): Promise<{ doc: PdfDoc; close: () => Promise<void> }> {
+async function open(file: string): Promise<{ doc: PdfDoc; close: () => Promise<void>; data: Buffer }> {
   const { getDocument } = await lib()
-  const data = new Uint8Array(await readFile(file))
+  const raw = await readFile(file)
+  // pdf.js may take ownership of (detach) the array it is given, so it gets a copy.
+  const data = new Uint8Array(raw)
   const task = getDocument({
     data,
     disableFontFace: true,
@@ -44,7 +48,7 @@ async function open(file: string): Promise<{ doc: PdfDoc; close: () => Promise<v
     verbosity: 0,
   })
   try {
-    return { doc: await task.promise, close: () => task.destroy() }
+    return { doc: await task.promise, close: () => task.destroy(), data: raw }
   } catch (err) {
     await task.destroy().catch(() => undefined)
     const name = (err as { name?: string }).name
@@ -55,9 +59,56 @@ async function open(file: string): Promise<{ doc: PdfDoc; close: () => Promise<v
   }
 }
 
-export async function inspectPdf(file: string, maxPages: number): Promise<PdfInfo> {
+/** Saved revisions: each incremental save appends a new `%%EOF`; linearized files have one extra. */
+function revisionCount(data: Buffer): number {
+  let count = 0
+  for (let i = data.indexOf('%%EOF'); i !== -1; i = data.indexOf('%%EOF', i + 5)) count++
+  const linearized = data.subarray(0, 1024).includes('/Linearized')
+  return Math.max(1, count - (linearized ? 1 : 0))
+}
+
+const INFO_FIELDS: [key: string, category: HiddenItem['category'], label: string, risk: HiddenItem['risk']][] = [
+  ['Author', 'people', 'Author', 'medium'],
+  ['Creator', 'software', 'Created with', 'low'],
+  ['Producer', 'software', 'Produced by', 'low'],
+  ['CreationDate', 'time', 'Created', 'low'],
+  ['ModDate', 'time', 'Modified', 'low'],
+  ['Title', 'description', 'Title', 'low'],
+  ['Subject', 'description', 'Subject', 'low'],
+  ['Keywords', 'description', 'Keywords', 'low'],
+]
+
+async function pdfHidden(doc: PdfDoc, data: Buffer): Promise<HiddenItem[]> {
+  const items: HiddenItem[] = []
+  const meta = await doc.getMetadata().catch(() => null)
+  const info = (meta?.info ?? {}) as Record<string, unknown>
+  for (const [key, category, label, risk] of INFO_FIELDS) {
+    const value = info[key]
+    if (typeof value !== 'string' || !value.trim()) continue
+    items.push(hiddenItem(category, label, key.endsWith('Date') ? formatPdfDate(value) : value, risk))
+  }
+  const xmp = (meta?.metadata as { getRaw?: () => unknown } | null | undefined)?.getRaw?.()
+  if (typeof xmp === 'string' && xmp) items.push(...xmpHidden(Buffer.from(xmp, 'utf8')))
+  const revisions = revisionCount(data)
+  if (revisions > 1) {
+    items.push(hiddenItem('history', 'Earlier revisions', `${revisions - 1} earlier saved version${revisions > 2 ? 's' : ''} kept inside the file; deleted text may be recoverable`, 'high'))
+  }
+  // Part of the document itself: reported so nobody is surprised, but kept when cleaning.
+  const attachments = await doc.getAttachments().catch(() => null)
+  if (attachments && attachments.size > 0) {
+    const names = [...attachments.values()].map((a) => (a as { filename?: string }).filename ?? '').filter(Boolean)
+    items.push(hiddenItem('content', 'Attached files', `${attachments.size}${names.length ? `: ${names.slice(0, 5).join(', ')}` : ''}`, 'medium', false))
+  }
+  // Typed as a Map, but pdf.js returns a plain object.
+  const scripts: unknown = await doc.getJSActions().catch(() => null)
+  const scriptCount = scripts instanceof Map ? scripts.size : scripts && typeof scripts === 'object' ? Object.keys(scripts).length : 0
+  if (scriptCount > 0) items.push(hiddenItem('content', 'JavaScript', 'document-level scripts (never run by ANYFORM)', 'medium', false))
+  return sortHidden(dedupeHidden(items))
+}
+
+export async function inspectPdf(file: string, maxPages: number): Promise<PdfInfo & { hidden: HiddenItem[] }> {
   const { PermissionFlag } = await lib()
-  const { doc, close } = await open(file)
+  const { doc, close, data } = await open(file)
   try {
     if (doc.numPages < 1) throw new SandboxError('CORRUPT_MEDIA', 'This PDF has no pages.')
     if (doc.numPages > maxPages) throw new SandboxError('DURATION_LIMIT', `This PDF has ${doc.numPages} pages; the limit is ${maxPages}.`)
@@ -73,10 +124,69 @@ export async function inspectPdf(file: string, maxPages: number): Promise<PdfInf
         copy: perms === null || perms.has(PermissionFlag.COPY),
         print: perms === null || perms.has(PermissionFlag.PRINT) || perms.has(PermissionFlag.PRINT_HIGH_QUALITY),
       },
+      hidden: await pdfHidden(doc, data),
     }
   } finally {
     await close()
   }
+}
+
+/** Every indirect object reachable from `root`; anything else is a leftover of an earlier revision. */
+function reachable(context: PDFDocument['context'], root: PDFObject): Set<PDFRef> {
+  const seen = new Set<PDFRef>()
+  const stack: PDFObject[] = [root]
+  while (stack.length) {
+    const obj = stack.pop()!
+    if (obj instanceof PDFRef) {
+      if (seen.has(obj)) continue
+      seen.add(obj)
+      const target = context.lookup(obj)
+      if (target) stack.push(target)
+    } else if (obj instanceof PDFDict) {
+      for (const [, value] of obj.entries()) stack.push(value)
+    } else if (obj instanceof PDFArray) {
+      stack.push(...obj.asArray())
+    } else if (obj instanceof PDFStream) {
+      stack.push(obj.dict)
+    }
+  }
+  return seen
+}
+
+/**
+ * Rewrites a PDF without its document information, XMP packets, file
+ * identifiers, application private data and earlier revisions. Pages,
+ * bookmarks, forms and attachments are kept.
+ */
+export async function cleanPdf(a: { input: string; output: string }): Promise<{ pages: number }> {
+  let doc: PDFDocument
+  try {
+    doc = await PDFDocument.load(await readFile(a.input), { updateMetadata: false })
+  } catch (err) {
+    if (err instanceof EncryptedPDFError) {
+      throw new SandboxError('PROTECTED_FILE', 'This PDF is encrypted. Cleaning it would mean removing the encryption, which ANYFORM does not do.')
+    }
+    throw new SandboxError('CORRUPT_MEDIA', 'This PDF could not be read. It may be damaged.')
+  }
+  const { context, catalog } = doc
+  const drop = (dict: PDFDict, key: string) => {
+    const value = dict.get(PDFName.of(key))
+    if (value instanceof PDFRef) context.delete(value)
+    dict.delete(PDFName.of(key))
+  }
+  if (context.trailerInfo.Info instanceof PDFRef) context.delete(context.trailerInfo.Info)
+  context.trailerInfo.Info = undefined
+  context.trailerInfo.ID = undefined
+  drop(catalog, 'Metadata')
+  drop(catalog, 'PieceInfo')
+  for (const page of doc.getPages()) {
+    drop(page.node, 'Metadata')
+    drop(page.node, 'PieceInfo')
+  }
+  const keep = reachable(context, context.trailerInfo.Root!)
+  for (const [ref] of context.enumerateIndirectObjects()) if (!keep.has(ref)) context.delete(ref)
+  await writeFile(a.output, await doc.save())
+  return { pages: doc.getPageCount() }
 }
 
 export async function pdfToText(input: string, output: string, onProgress: Progress): Promise<{ pages: number; characters: number }> {
@@ -172,9 +282,8 @@ export interface ImagesToPdfArgs {
 export async function imagesToPdf(a: ImagesToPdfArgs, onProgress: Progress): Promise<{ pages: number }> {
   const meta = await sharp(a.input, { limitInputPixels: a.maxPixels }).metadata()
   const frames = Math.min(meta.pages ?? 1, a.maxPages)
-  const pdf = await PDFDocument.create()
-  pdf.setProducer('ANYFORM')
-  pdf.setCreator('ANYFORM')
+  // No producer, creator or dates: the PDF says nothing about who made it, or when.
+  const pdf = await PDFDocument.create({ updateMetadata: false })
   for (let i = 0; i < frames; i++) {
     const frame = await frameForPdf(a.input, i, a.maxPixels)
     const image = frame.kind === 'png' ? await pdf.embedPng(frame.bytes) : await pdf.embedJpg(frame.bytes)

@@ -316,6 +316,9 @@ function computeOutputs(rt: RT, info: FileInfo): { outputs: OutputChoice[]; firs
       firstError ??= err
     }
   }
+  // Clean copies (same format, hidden data removed) go after real conversions, so they are never the default.
+  const isClean = (o: OutputChoice) => o.adapterIds[0]!.startsWith('clean-')
+  outputs.sort((a, b) => Number(isClean(a)) - Number(isClean(b)))
   return { outputs, firstError }
 }
 

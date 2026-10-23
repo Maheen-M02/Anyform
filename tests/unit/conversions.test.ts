@@ -44,7 +44,7 @@ function fake(id: string, inputs: FormatId[], output: FormatId, extra: Partial<C
     id, label: id, inputFormats: inputs, outputFormat: output, requiredTools: [], lossy: false, notes: [],
     optionFields: () => [], validateInput: () => undefined, validateOptions: () => ({}),
     estimate: () => ({ outputBytes: 0, cpuSeconds: 0 }), convert: async () => undefined,
-    verifyOutput: async () => ({ format: output, sizeBytes: 0, durationSec: null, details: {} }),
+    verifyOutput: async () => ({ format: output, sizeBytes: 0, durationSec: null, details: {}, checks: [] }),
     ...extra,
   }
 }
@@ -52,7 +52,7 @@ function fake(id: string, inputs: FormatId[], output: FormatId, extra: Partial<C
 describe('registry planning', () => {
   it('returns null for unregistered conversions and plain identity', () => {
     expect(registry.plan('mp3', 'png')).toBeNull()
-    expect(registry.plan('mp4', 'mp4')).toBeNull()
+    expect(registry.plan('mp4', 'mp4')!.steps.map((s) => s.id)).toEqual(['clean-mp4'])
     expect(registry.plan('zip', 'zip')).toBeNull()
   })
 
@@ -93,9 +93,9 @@ describe('registry planning', () => {
   it('describes plans with kind, lossiness, notes and options', () => {
     const choice = describePlan(registry.plan('mp4', 'mp3')!, av())
     expect(choice).toMatchObject({ kind: 'audio', lossy: true, sameFormat: false })
-    expect(choice.options.map((o) => o.key)).toEqual(['bitrate'])
+    expect(choice.options.map((o) => o.key)).toEqual(['bitrate', 'maxBytes'])
     const multi = describePlan(registry.plan('mp4', 'mp3')!, av({ audioStreams: [stream(), stream({ index: 2, ordinal: 1, isDefault: false })] }))
-    expect(multi.options.map((o) => o.key)).toEqual(['bitrate', 'streamIndex'])
+    expect(multi.options.map((o) => o.key)).toEqual(['bitrate', 'maxBytes', 'streamIndex'])
     expect(describePlan(registry.plan('png', 'png')!, img()).sameFormat).toBe(true)
   })
 })
@@ -106,8 +106,8 @@ describe('audio adapters', () => {
   const flac = createAudioAdapter('flac')
 
   it('validates options and fills defaults', () => {
-    expect(mp3.validateOptions({}, av())).toEqual({ bitrate: 192, streamIndex: 1 })
-    expect(mp3.validateOptions({ bitrate: '320' }, av())).toEqual({ bitrate: 320, streamIndex: 1 })
+    expect(mp3.validateOptions({}, av())).toEqual({ bitrate: 192, streamIndex: 1, maxBytes: null })
+    expect(mp3.validateOptions({ bitrate: '320' }, av())).toEqual({ bitrate: 320, streamIndex: 1, maxBytes: null })
     expect(wav.validateOptions({ bitDepth: 24 }, av())).toEqual({ bitDepth: 24, streamIndex: 1 })
     for (const bad of [{ bitrate: 999 }, { bitrate: 'abc' }, { streamIndex: 5 }, { extra: 1 }]) {
       expect(() => mp3.validateOptions(bad, av())).toThrow(expect.objectContaining({ code: 'INVALID_OPTIONS' }))
@@ -212,7 +212,7 @@ describe('image adapters', () => {
 
   it('validates dimensions against encoder limits', () => {
     const webp = createImageAdapter('webp')
-    expect(webp.validateOptions({ width: '', height: null }, img())).toEqual({ width: null, height: null, quality: 'balanced' })
+    expect(webp.validateOptions({ width: '', height: null }, img())).toEqual({ width: null, height: null, quality: 'balanced', maxBytes: null })
     expect(() => webp.validateOptions({}, img({ width: 20000, height: 100 }))).toThrow(/at most 16383/)
     expect(webp.validateOptions({ width: 16000 }, img({ width: 20000, height: 100 })).width).toBe(16000)
     for (const bad of [{ width: 0 }, { width: 1.5 }, { width: -4 }, { width: 50000 }, { quality: 'max' }]) {
