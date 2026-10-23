@@ -11,6 +11,31 @@
 `GET /api/v1/ready` reports whether FFmpeg, FFprobe, the sandbox, storage and the metadata store are usable.
 Point your orchestrator's readiness probe at it, and its liveness probe at `/api/v1/health`.
 
+## Live pilot: Azure Container Apps (free grant)
+
+ANYFORM runs at https://anyform.proudfield-7345d31e.centralindia.azurecontainerapps.io in local
+mode (one container: web, in-process queue, cleanup).
+
+- **Image:** GitHub Actions (`.github/workflows/image.yml`) builds the Dockerfile on every push to
+  `main` or `deploy/azure` and publishes `ghcr.io/maheen-m02/anyform:<commit sha>` and `:latest`
+  (a public package, so Azure pulls it without credentials).
+- **Azure:** resource group `anyform-rg` (Central India), environment `anyform-env` (no Log
+  Analytics workspace, so no log ingestion charges), app `anyform`: 1 vCPU, 2 GiB, **min 0 /
+  max 1 replica**. Scaling to zero keeps it inside the consumption plan's monthly free grant
+  (180,000 vCPU-seconds and 360,000 GiB-seconds, about 50 busy hours a month at this size). The
+  first request after an idle period waits for a cold start.
+- **One replica only:** uploads, results and job metadata live on the container's ephemeral
+  disk, so they are lost when it scales to zero or restarts (results expire after an hour anyway).
+- **Settings** (container app environment variables): `SESSION_SECRET` (an app secret),
+  `PUBLIC_ORIGIN`, `TRUST_PROXY=true`, and limits sized for 1 vCPU: `WORKER_CONCURRENCY=1`,
+  `MAX_UPLOAD_MB=200` (ingress requests time out after 240 s), `MAX_VIDEO_DURATION_SECONDS=1800`,
+  `JOB_TIMEOUT_SECONDS=1800`, `SESSION_QUOTA_MB=1024`, `MIN_FREE_DISK_MB=512`.
+- **Release:** after the image workflow succeeds, run
+  `az containerapp update -g anyform-rg -n anyform --image ghcr.io/maheen-m02/anyform:<sha>`.
+- **Remove everything:** delete the `anyform-rg` resource group.
+- YouTube often refuses downloads from cloud data-centre addresses, so YouTube and Spotify links
+  may fail here even though yt-dlp is installed.
+
 ## Docker Compose (web + 2 workers + Redis)
 
 ```bash
