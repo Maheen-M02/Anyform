@@ -1,11 +1,12 @@
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
 import { FORMATS, IMAGE_FORMATS } from '@/lib/formats'
+import { formatTarget, MB, MIN_IMAGE_TARGET } from '@/lib/size-targets'
 import { getConfig } from '../../config'
 import { AppError } from '../../errors'
 import type { FileInfo, ImageInfo } from '../../inspect/types'
 import { runSandbox } from '../../sandbox'
-import type { ConversionAdapter, OptionField } from '../types'
+import type { ConversionAdapter, OptionField, VerificationCheck } from '../types'
 import { verificationError } from './ffmpeg-common'
 
 export type ImageOutput = (typeof IMAGE_FORMATS)[number]
@@ -25,7 +26,12 @@ export interface ImageOptions {
   width: number | null
   height: number | null
   quality: keyof typeof QUALITY
+  /** Upper bound for the output size; quality and then dimensions are reduced to fit. */
+  maxBytes?: number | null
 }
+
+/** Size targets offered in the UI (the API accepts any value in range). */
+export const IMAGE_SIZE_TARGETS = [200_000, 500_000, MB, 2 * MB, 5 * MB]
 
 export function imageOf(info: FileInfo): ImageInfo {
   if (info.kind !== 'image') throw new AppError('UNSUPPORTED_CONVERSION', 'This conversion needs an image.')
@@ -57,6 +63,7 @@ export function createImageAdapter(output: ImageOutput): ConversionAdapter<Image
       width: optionalDimension.default(null),
       height: optionalDimension.default(null),
       quality: z.enum(['high', 'balanced', 'small']).default('balanced'),
+      maxBytes: z.union([z.literal('none'), z.null(), z.coerce.number().int().min(MIN_IMAGE_TARGET).max(1000 * MB)]).default('none'),
     })
     .strict()
 
@@ -105,6 +112,14 @@ export function createImageAdapter(output: ImageOutput): ConversionAdapter<Image
           default: 'balanced',
         })
       }
+      fields.push({
+        key: 'maxBytes',
+        label: 'Max file size',
+        type: 'select',
+        choices: [{ value: 'none', label: 'No limit' }, ...IMAGE_SIZE_TARGETS.map((b) => ({ value: b, label: formatTarget(b) }))],
+        default: 'none',
+        help: lossy ? 'Quality is lowered first, then the image is scaled down until it fits.' : 'The image is scaled down until it fits.',
+      })
       return fields
     },
 
@@ -125,7 +140,8 @@ export function createImageAdapter(output: ImageOutput): ConversionAdapter<Image
       if (target.width > limit || target.height > limit) {
         throw new AppError('INVALID_OPTIONS', `${label} images can be at most ${limit} pixels wide or high. Set a smaller width or height.`)
       }
-      return parsed.data
+      const { maxBytes, ...rest } = parsed.data
+      return { ...rest, maxBytes: maxBytes === 'none' ? null : maxBytes }
     },
 
     estimate(info, options) {
@@ -149,6 +165,7 @@ export function createImageAdapter(output: ImageOutput): ConversionAdapter<Image
           quality: output === 'avif' ? q.avif : q.standard,
           animated: keepsAnimation(image, output),
           maxPixels: getConfig().maxImagePixels,
+          maxBytes: ctx.options.maxBytes ?? undefined,
         },
         { timeoutMs: ctx.timeoutMs, signal: ctx.signal },
       )
@@ -166,14 +183,32 @@ export function createImageAdapter(output: ImageOutput): ConversionAdapter<Image
         throw verificationError(id, 'output not readable')
       }
       const expected = fitInside(image.width, image.height, ctx.options.width, ctx.options.height)
+      const maxBytes = ctx.options.maxBytes
       if (out.format !== output) throw verificationError(id, `format ${out.format}`)
-      if (Math.abs(out.width - expected.width) > 1 || Math.abs(out.height - expected.height) > 1) {
+      if (maxBytes) {
+        // Fitting a size may scale further down, but never up and never off-ratio.
+        const ratio = (out.width / out.height) / (expected.width / expected.height)
+        if (out.width > expected.width + 1 || out.height > expected.height + 1 || (Math.min(out.width, out.height) > 50 && Math.abs(ratio - 1) > 0.03)) {
+          throw verificationError(id, `size ${out.width}x${out.height} does not fit ${expected.width}x${expected.height}`)
+        }
+        if (size > maxBytes) throw verificationError(id, `size ${size} > ${maxBytes}`)
+      } else if (Math.abs(out.width - expected.width) > 1 || Math.abs(out.height - expected.height) > 1) {
         throw verificationError(id, `size ${out.width}x${out.height} != ${expected.width}x${expected.height}`)
       }
       const details: Record<string, string | number> = { dimensions: `${out.width}×${out.height}` }
       if (out.frames > 1) details.frames = out.frames
-      if (lossy && output !== 'gif') details.quality = ctx.options.quality
-      return { format: output, sizeBytes: size, durationSec: null, details }
+      if (lossy && output !== 'gif') details.quality = maxBytes ? 'fitted to size' : ctx.options.quality
+      const checks: VerificationCheck[] = [
+        { label: 'Image', detail: `Re-opened with libvips: ${label}${out.frames > 1 ? `, ${out.frames} frames` : ''}` },
+        {
+          label: 'Dimensions',
+          detail: maxBytes && (out.width !== expected.width || out.height !== expected.height)
+            ? `${out.width}×${out.height}, scaled down from ${expected.width}×${expected.height} to fit the size limit`
+            : `${out.width}×${out.height}, as expected`,
+        },
+      ]
+      if (maxBytes) checks.push({ label: 'Size limit', detail: `${size.toLocaleString('en-US')} bytes, under the ${formatTarget(maxBytes)} limit` })
+      return { format: output, sizeBytes: size, durationSec: null, details, checks }
     },
   }
 }

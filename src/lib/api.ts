@@ -34,9 +34,33 @@ export interface Media {
   }[]
 }
 
+export type HiddenCategory = 'location' | 'device' | 'people' | 'time' | 'software' | 'history' | 'description' | 'content'
+
+/** Metadata inside a file that viewers do not normally see. */
+export interface HiddenItem {
+  category: HiddenCategory
+  label: string
+  value: string
+  risk: 'high' | 'medium' | 'low'
+  /** False for parts of the content itself (e.g. PDF attachments), which cleaning keeps. */
+  removable: boolean
+}
+
 interface InfoBase {
   format: FormatId | null
   sizeBytes: number
+  hidden?: HiddenItem[]
+}
+
+/** How an output was checked; every field comes from re-reading the produced file. */
+export interface VerificationReport {
+  version: 1
+  verifiedAt: number
+  input: { name: string; format: FormatId; sizeBytes: number; sha256: string }
+  output: { name: string; format: FormatId; sizeBytes: number; sha256: string }
+  checks: { label: string; detail: string }[]
+  hidden: { before: HiddenItem[]; removed: HiddenItem[]; remaining: HiddenItem[] | null }
+  destination: { id: string; label: string; maxBytes: number | null } | null
 }
 
 /** Mirror of the server's FileInfo: what the file really contains. */
@@ -59,6 +83,8 @@ export interface OutputChoice {
   label: string
   kind: FormatKind
   sameFormat: boolean
+  /** Adapters that produce this output; clean copies start with "clean-". */
+  adapterIds: string[]
   lossy: boolean
   notes: string[]
   options: OptionField[]
@@ -89,8 +115,16 @@ export interface Job {
   inputFormat: FormatId
   outputFormat: FormatId
   options: Record<string, unknown>
+  destination: string | null
   error: ApiErrorBody | null
-  output: { filename: string; format: FormatId; sizeBytes: number; durationSec: number | null; details: Record<string, string | number> } | null
+  output: {
+    filename: string
+    format: FormatId
+    sizeBytes: number
+    durationSec: number | null
+    details: Record<string, string | number>
+    report: VerificationReport | null
+  } | null
   downloadUrl: string | null
   previewUrl: string | null
   createdAt: number
@@ -149,8 +183,8 @@ export const api = {
   /** Asks the server to download a file from a public link. */
   importUrl: (url: string) => request<{ upload: Upload }>('POST', '/api/v1/imports', { url }).then((r) => r.upload),
   validate: (uploadId: string) => request<{ upload: Upload }>('POST', '/api/v1/validate', { uploadId }).then((r) => r.upload),
-  convert: (uploadId: string, outputFormat: FormatId, options: Record<string, unknown>) =>
-    request<{ job: Job }>('POST', '/api/v1/conversions', { uploadId, outputFormat, options }).then((r) => r.job),
+  convert: (uploadId: string, outputFormat: FormatId, options: Record<string, unknown>, destination?: string | null) =>
+    request<{ job: Job }>('POST', '/api/v1/conversions', { uploadId, outputFormat, options, ...(destination ? { destination } : {}) }).then((r) => r.job),
   job: (id: string) => request<{ job: Job }>('GET', `/api/v1/conversions/${id}`).then((r) => r.job),
   cancel: (id: string) => request<{ job: Job }>('POST', `/api/v1/conversions/${id}/cancel`).then((r) => r.job),
   remove: (id: string) => request<void>('DELETE', `/api/v1/conversions/${id}`),

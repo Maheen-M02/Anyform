@@ -37,11 +37,30 @@ export interface ArchiveInfo {
   unsafePaths: boolean
 }
 
+/** What a piece of hidden data reveals about the person who made the file. */
+export type HiddenCategory = 'location' | 'device' | 'people' | 'time' | 'software' | 'history' | 'description' | 'content'
+
+/**
+ * Data carried inside a file that its viewer does not normally see (EXIF GPS,
+ * camera serial numbers, PDF authors, edit history…). Values are shown to the
+ * file's owner only and are truncated.
+ */
+export interface HiddenItem {
+  category: HiddenCategory
+  label: string
+  value: string
+  risk: 'high' | 'medium' | 'low'
+  /** False for things that are part of the content itself (e.g. PDF attachments), which cleaning keeps. */
+  removable: boolean
+}
+
 interface Base {
   family: ContainerFamily
   /** Identified format, or null when readable but not a format we support. */
   format: FormatId | null
   sizeBytes: number
+  /** Hidden metadata found in the file. Absent on records created before the scan existed. */
+  hidden?: HiddenItem[]
 }
 
 export type FileInfo =

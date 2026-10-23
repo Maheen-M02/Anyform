@@ -1,7 +1,8 @@
 import type { FormatId } from '@/lib/formats'
 import type { JobStatus, UploadStatus } from '@/lib/states'
 import type { ErrorCode } from '../errors'
-import type { FileInfo } from '../inspect/types'
+import type { VerificationCheck } from '../conversions/types'
+import type { FileInfo, HiddenItem } from '../inspect/types'
 
 export interface StoredError {
   code: ErrorCode
@@ -24,6 +25,27 @@ export interface UploadRecord {
   expiresAt: number
 }
 
+/**
+ * Evidence that an output was checked, shown to the user and downloadable as
+ * a receipt. Everything here was established by re-reading the produced file.
+ */
+export interface VerificationReport {
+  version: 1
+  verifiedAt: number
+  input: { name: string; format: FormatId; sizeBytes: number; sha256: string }
+  output: { name: string; format: FormatId; sizeBytes: number; sha256: string }
+  checks: VerificationCheck[]
+  hidden: {
+    /** Hidden data found in the source when it was uploaded. */
+    before: HiddenItem[]
+    /** Items of `before` that the output no longer contains. */
+    removed: HiddenItem[]
+    /** Hidden data found in the output (null when the output format cannot be scanned). */
+    remaining: HiddenItem[] | null
+  }
+  destination: { id: string; label: string; maxBytes: number | null } | null
+}
+
 export interface JobOutput {
   storageKey: string
   filename: string
@@ -31,6 +53,8 @@ export interface JobOutput {
   sizeBytes: number
   durationSec: number | null
   details: Record<string, string | number>
+  /** Absent on jobs completed before reports existed. */
+  report?: VerificationReport
 }
 
 export interface JobRecord {
@@ -42,6 +66,8 @@ export interface JobRecord {
   outputFormat: FormatId
   adapterIds: string[]
   options: Record<string, unknown>
+  /** Destination preset the settings came from (e.g. "discord"), if any. */
+  destination?: string | null
   /** Identifies equivalent requests so duplicate submissions return the same job. */
   dedupeKey: string
   status: JobStatus

@@ -70,7 +70,7 @@ describe('video → video', () => {
 
   it('offers no video outputs for audio-only files', async () => {
     const { upload } = await new TestClient().prepare(fixture('tone.flac'))
-    expect(upload!.outputs.map((o) => o.format).sort()).toEqual(['m4a', 'mp3', 'ogg', 'wav'])
+    expect(upload!.outputs.map((o) => o.format).sort()).toEqual(['flac', 'm4a', 'mp3', 'ogg', 'wav'])
   })
 })
 

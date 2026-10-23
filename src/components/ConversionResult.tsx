@@ -1,6 +1,7 @@
 import type { Job } from '@/lib/api'
 import { FORMATS, formatBytes, formatDuration } from '@/lib/formats'
 import { Button, Fact, Tag } from './ui'
+import { VerificationReceipt } from './VerificationReceipt'
 
 /** In-browser preview for formats browsers can display natively. */
 export function Preview({ src, job }: { src: string; job: Job }) {
@@ -70,6 +71,7 @@ const DETAIL_LABELS: Record<string, string> = {
   folders: 'Folders',
   unpackedBytes: 'Unpacked',
   skipped: 'Skipped',
+  streams: 'Streams',
 }
 
 export function formatDetail(key: string, value: string | number): string {
@@ -123,6 +125,7 @@ export function ConversionResult({ job, onConvertAnother, onAdjust }: { job: Job
           <Fact key={label} label={label} value={value} />
         ))}
       </dl>
+      {out.report && <VerificationReceipt report={out.report} />}
       {job.previewUrl && <Preview src={job.previewUrl} job={job} />}
       <div className="flex flex-wrap items-center gap-3">
         {job.downloadUrl && <DownloadButton href={job.downloadUrl} filename={out.filename} />}

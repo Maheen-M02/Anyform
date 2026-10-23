@@ -42,7 +42,7 @@ describe('MP4 → MP3 end to end', () => {
 
     expect(upload.info?.format).toBe('mp4')
     expect(av(upload).audioStreams).toHaveLength(1)
-    expect(upload.outputs.map((o) => o.format).sort()).toEqual(['flac', 'm4a', 'mp3', 'ogg', 'wav', 'webm'])
+    expect(upload.outputs.map((o) => o.format).sort()).toEqual(['flac', 'm4a', 'mp3', 'mp4', 'ogg', 'wav', 'webm'])
     expect(upload.outputs.find((o) => o.format === 'mp3')!.lossy).toBe(true)
 
     expect(job.output?.filename).toBe('video-audio.mp3')

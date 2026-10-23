@@ -5,6 +5,10 @@ import { AppError } from '../errors'
 import { logger } from '../logger'
 import { runTool, sanitizeDiagnostics, ToolError } from './process'
 import { DEMUXER_WHITELIST, matroskaDocType, readHead, sniffBytes, type ContainerFamily } from './sniff'
+import type { MediaTag } from '../inspect/hidden'
+
+/** Tags kept per file for the hidden-data scan (keys and values are bounded too). */
+const MAX_TAGS = 200
 
 export interface AudioStreamInfo {
   /** Absolute stream index inside the container (used with `-map 0:<index>`). */
@@ -50,6 +54,8 @@ export interface MediaInfo {
   sizeBytes: number
   audioStreams: AudioStreamInfo[]
   videoStreams: VideoStreamInfo[]
+  /** Container and stream tags (titles, devices, locations…). Absent on older records. */
+  tags?: MediaTag[]
 }
 
 const num = z.union([z.string(), z.number()]).optional().transform((v) => {
@@ -118,6 +124,13 @@ export function parseProbeJson(raw: ProbeJson, family: ContainerFamily, docType:
   const majorBrand = tags.major_brand ?? null
   const audio = raw.streams.filter((s) => s.codec_type === 'audio')
   const video = raw.streams.filter((s) => s.codec_type === 'video')
+  const mediaTags: MediaTag[] = []
+  const tagSources = [{ stream: null, record: raw.format.tags }, ...raw.streams.map((s) => ({ stream: s.index, record: s.tags }))]
+  for (const { stream, record } of tagSources) {
+    for (const [key, value] of Object.entries(record ?? {})) {
+      if (mediaTags.length < MAX_TAGS) mediaTags.push({ key: key.slice(0, 80), value: value.slice(0, 500), stream })
+    }
+  }
   return {
     family,
     format: detectFormat(raw.format.format_name, majorBrand, docType),
@@ -153,6 +166,7 @@ export function parseProbeJson(raw: ProbeJson, family: ContainerFamily, docType:
       isAttachedPicture: s.disposition?.attached_pic === 1,
       decodable: null,
     })),
+    tags: mediaTags,
   }
 }
 

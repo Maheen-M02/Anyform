@@ -1,17 +1,28 @@
 'use client'
 
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { api, ApiError, type ApiErrorBody, type Capabilities, type Job } from '@/lib/api'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { api, ApiError, type ApiErrorBody, type Capabilities, type Job, type Upload } from '@/lib/api'
+import { findDestination } from '@/lib/destinations'
 import { FORMATS, formatBytes, type FormatId } from '@/lib/formats'
 import { isActiveJob } from '@/lib/states'
-import { defaultOptions, defaultSettings, initialWorkflow, workflowReducer, type ConversionSettings } from '@/lib/workflow'
+import {
+  cleanSettings,
+  defaultOptions,
+  defaultSettings,
+  destinationSettings,
+  initialWorkflow,
+  workflowReducer,
+  type ConversionSettings,
+} from '@/lib/workflow'
 import { ConversionHistory } from './ConversionHistory'
 import { ConversionOptions } from './ConversionOptions'
 import { ConversionProgress } from './ConversionProgress'
 import { ConversionResult } from './ConversionResult'
+import { DestinationPicker, destinationPlans } from './DestinationPicker'
 import { ErrorState } from './ErrorState'
 import { FileMetadataCard } from './FileMetadataCard'
 import { FormatSelector } from './FormatSelector'
+import { HiddenData } from './HiddenData'
 import { Reveal } from './motion/Reveal'
 import { PipelineDemo } from './PipelineDemo'
 import { UploadDropzone } from './UploadDropzone'
@@ -25,9 +36,21 @@ function toErrorBody(err: unknown): ApiErrorBody {
   return { code: 'UNKNOWN', message: 'Something went wrong. Please try again.' }
 }
 
+function cleanHint(upload: Upload): string {
+  switch (upload.info?.kind) {
+    case 'av':
+      return 'Makes a copy with the audio and video untouched: nothing is re-encoded.'
+    case 'pdf':
+      return 'Makes a copy with every page, link and form unchanged.'
+    default:
+      return 'Re-saves the image at high quality without any of this.'
+  }
+}
+
 export function Converter({ conversionCount }: { conversionCount: number }) {
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflow)
-  const [settings, setSettings] = useState<ConversionSettings>({ format: null, options: {} })
+  const [settings, setSettings] = useState<ConversionSettings>({ format: null, options: {}, destination: null })
+  const [lastAction, setLastAction] = useState<'convert' | 'clean'>('convert')
   const [caps, setCaps] = useState<Capabilities | null>(null)
   const [capsError, setCapsError] = useState(false)
   const [history, setHistory] = useState<Job[]>([])
@@ -118,17 +141,24 @@ export function Converter({ conversionCount }: { conversionCount: number }) {
     dispatch({ type: 'RESET' })
   }, [])
 
-  const submit = useCallback(async () => {
-    if (state.phase !== 'ready' || !settings.format) return
-    dispatch({ type: 'SUBMIT' })
-    try {
-      const job = await api.convert(state.upload.id, settings.format, settings.options)
-      dispatch({ type: 'JOB_UPDATED', job })
-      refreshHistory()
-    } catch (err) {
-      dispatch({ type: 'SUBMIT_FAILED', error: toErrorBody(err) })
-    }
-  }, [state, settings, refreshHistory])
+  const start = useCallback(
+    async (s: ConversionSettings, action: 'convert' | 'clean') => {
+      if (state.phase !== 'ready' || !s.format) return
+      setSettings(s)
+      setLastAction(action)
+      dispatch({ type: 'SUBMIT' })
+      try {
+        const job = await api.convert(state.upload.id, s.format, s.options, s.destination)
+        dispatch({ type: 'JOB_UPDATED', job })
+        refreshHistory()
+      } catch (err) {
+        dispatch({ type: 'SUBMIT_FAILED', error: toErrorBody(err) })
+      }
+    },
+    [state, refreshHistory],
+  )
+
+  const submit = useCallback(() => start(settings, 'convert'), [start, settings])
 
   // Poll the job while it is active. The server is the source of truth for status and progress.
   const activeJobId = state.phase === 'converting' ? state.job.id : null
@@ -185,6 +215,10 @@ export function Converter({ conversionCount }: { conversionCount: number }) {
   const upload = 'upload' in state ? state.upload : null
   const choice = upload?.outputs.find((o) => o.format === settings.format) ?? null
   const settingsLocked = state.phase !== 'ready'
+  const plans = useMemo(() => (upload ? destinationPlans(upload) : []), [upload])
+  const clean = useMemo(() => (upload ? cleanSettings(upload) : null), [upload])
+  const destination = settings.destination ? findDestination(settings.destination) : undefined
+  const showHidden = upload?.status === 'validated' && state.phase !== 'rejected'
 
   return (
     <div className="space-y-6">
@@ -207,6 +241,15 @@ export function Converter({ conversionCount }: { conversionCount: number }) {
           {hasFile && (
             <>
               <FileMetadataCard file={state.file} upload={upload} state={state} />
+              {showHidden && upload && (
+                <HiddenData
+                  upload={upload}
+                  canClean={state.phase === 'ready' && clean !== null}
+                  cleaning={lastAction === 'clean' && (state.phase === 'submitting' || state.phase === 'converting')}
+                  cleanHint={cleanHint(upload)}
+                  onClean={() => clean && start(clean, 'clean')}
+                />
+              )}
               {state.phase === 'rejected' && (
                 <ErrorState
                   title="This file can't be converted"
@@ -256,11 +299,26 @@ export function Converter({ conversionCount }: { conversionCount: number }) {
             <div key={state.phase === 'submitting' ? 'ready' : state.phase} className="animate-fade-in space-y-6">
               {(state.phase === 'ready' || state.phase === 'submitting') && (
                 <>
+                  {plans.length > 0 && (
+                    <>
+                      <DestinationPicker
+                        plans={plans}
+                        value={settings.destination}
+                        disabled={settingsLocked}
+                        onPick={(plan) => setSettings(destinationSettings(upload, plan.destination.id, plan.target))}
+                      />
+                      <div className="flex items-center gap-3" aria-hidden>
+                        <span className="h-px flex-1 bg-line" />
+                        <span className="font-mono text-[11px] tracking-wider text-faint uppercase">or pick a format</span>
+                        <span className="h-px flex-1 bg-line" />
+                      </div>
+                    </>
+                  )}
                   <FormatSelector
                     choices={upload.outputs}
                     value={settings.format}
                     disabled={settingsLocked}
-                    onChange={(format) => setSettings({ format, options: defaultOptions(upload, format) })}
+                    onChange={(format) => setSettings({ format, options: defaultOptions(upload, format), destination: null })}
                   />
                   {choice && (
                     <ConversionOptions
@@ -268,7 +326,8 @@ export function Converter({ conversionCount }: { conversionCount: number }) {
                       upload={upload}
                       values={settings.options}
                       disabled={settingsLocked}
-                      onChange={(key, value) => setSettings((s) => ({ ...s, options: { ...s.options, [key]: value } }))}
+                      // Editing a preset's settings by hand means it no longer stands for that destination.
+                      onChange={(key, value) => setSettings((s) => ({ ...s, options: { ...s.options, [key]: value }, destination: null }))}
                     />
                   )}
                   <Button
@@ -282,6 +341,8 @@ export function Converter({ conversionCount }: { conversionCount: number }) {
                       <>
                         <Spinner /> Starting…
                       </>
+                    ) : destination ? (
+                      `Convert for ${destination.label}`
                     ) : (
                       `Convert to ${settings.format ? FORMATS[settings.format].label : '…'}`
                     )}

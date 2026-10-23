@@ -3,7 +3,7 @@
 **Everything in. Anything out.** A universal file conversion platform built around a registry of
 verified conversion adapters.
 
-ANYFORM converts **20 input formats across 104 direct conversions**. Every input is identified from
+ANYFORM converts **20 input formats across 104 direct conversions**, plus metadata-free clean copies of 11 formats. Every input is identified from
 its contents (never its name), and every output is independently verified before it can be downloaded.
 
 | Category | Inputs | Outputs | Options |
@@ -29,6 +29,22 @@ directly.
 **Not supported (and not advertised):** Office documents (DOCX/XLSX/PPTX) and PDF → Word, which would
 need LibreOffice; OCR of scanned PDFs; HEIC/HEIF photos; RAR/7z archives; password-protected files
 (ANYFORM never removes encryption or DRM). Uploading one of these gets a specific explanation.
+
+## What sets it apart
+
+- **Convert for a destination.** "Where is it going?" presets (Discord, Email, WhatsApp, Website,
+  Instagram, Print, Smallest file) pick the format, settings and a size limit. Size targets are real:
+  video bitrate and resolution are budgeted from the duration (and re-encoded lower if rate control
+  overshoots), MP3 drops to the largest bitrate that fits, and images lose quality, then pixels,
+  until they fit. Unreachable targets are refused before any work starts (`SIZE_TARGET_UNREACHABLE`).
+  The same limits are available as a "Max file size" option (`maxBytes`) without a preset.
+- **A verification report with every output.** The checks each adapter ran, an independent
+  re-scan of the output for hidden data, and SHA-256 fingerprints of source and output. It can be
+  downloaded as a plain-text receipt (`output.report` in the API).
+- **"What's hidden in this file?"** Inspection lists GPS coordinates, camera and device details,
+  serial numbers, authors, editing history, earlier PDF revisions and more (EXIF, XMP, IPTC, PNG
+  text, container tags, PDF info), and one click makes a clean copy: audio/video streams are copied
+  bit-for-bit, PDFs are rewritten without metadata or old revisions, and images are re-saved.
 
 ## How it works
 

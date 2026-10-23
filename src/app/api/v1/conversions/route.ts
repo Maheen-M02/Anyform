@@ -11,6 +11,7 @@ const body = z
     uploadId: z.string().min(1).max(64),
     outputFormat: z.string().min(1).max(16),
     options: z.record(z.string(), z.union([z.string().max(64), z.number(), z.boolean()])).optional(),
+    destination: z.string().min(1).max(32).optional(),
   })
   .strict()
 

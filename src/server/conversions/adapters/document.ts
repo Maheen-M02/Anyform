@@ -60,11 +60,16 @@ export const pdfToText: ConversionAdapter<Record<string, never>> = {
     } catch {
       throw verificationError('pdf-to-txt', 'output is not valid UTF-8')
     }
+    const characters = text.replace(/\s+/g, '').length
     return {
       format: 'txt',
       sizeBytes: buf.length,
       durationSec: null,
-      details: { pages: pdfOf(ctx.info).pages, characters: text.replace(/\s+/g, '').length },
+      details: { pages: pdfOf(ctx.info).pages, characters },
+      checks: [
+        { label: 'Encoding', detail: 'Decoded as strict UTF-8 without errors' },
+        { label: 'Content', detail: `${characters.toLocaleString('en-US')} non-blank characters from ${pdfOf(ctx.info).pages} pages` },
+      ],
     }
   },
 }
@@ -166,11 +171,18 @@ function createPdfToImage(output: 'png' | 'jpg'): ConversionAdapter<PdfRenderOpt
         const zip = await runSandbox<ArchiveInfo>('inspect-archive', { path: ctx.outputPath, family: 'zip', limits: archiveLimits() }, opts).catch(() => null)
         if (!zip || zip.format !== 'zip' || zip.files !== expectedPages) throw verificationError(id, `zip has ${zip?.files} pages`)
         const details: Record<string, string | number> = { pages: expectedPages, dpi: ctx.options.dpi, images: output.toUpperCase() }
-        return { format: 'zip', sizeBytes: size, durationSec: null, details }
+        const checks = [{ label: 'Archive', detail: `Re-listed the ZIP: ${expectedPages} page images, one per PDF page` }]
+        return { format: 'zip', sizeBytes: size, durationSec: null, details, checks }
       }
       const image = await runSandbox<ImageInfo>('inspect-image', { path: ctx.outputPath, maxPixels: Number.MAX_SAFE_INTEGER }, opts).catch(() => null)
       if (!image || image.format !== output) throw verificationError(id, 'output not an image')
-      return { format: output, sizeBytes: size, durationSec: null, details: { dimensions: `${image.width}×${image.height}`, dpi: ctx.options.dpi, page: 1 } }
+      return {
+        format: output,
+        sizeBytes: size,
+        durationSec: null,
+        details: { dimensions: `${image.width}×${image.height}`, dpi: ctx.options.dpi, page: 1 },
+        checks: [{ label: 'Image', detail: `Re-opened with libvips: ${output.toUpperCase()}, ${image.width}×${image.height} at ${ctx.options.dpi} DPI` }],
+      }
     },
   }
 }
@@ -223,7 +235,13 @@ export const imageToPdf: ConversionAdapter<ImageToPdfOptions> = {
     const expected = Math.min(imageOf(ctx.info).frames, getConfig().maxRenderPages)
     const pages = await runSandbox<number>('pdf-pages', { path: ctx.outputPath }, { timeoutMs: ctx.timeoutMs, signal: ctx.signal }).catch(() => 0)
     if (pages !== expected) throw verificationError('image-to-pdf', `pdf has ${pages} pages, expected ${expected}`)
-    return { format: 'pdf', sizeBytes: size, durationSec: null, details: { pages, pageSize: ctx.options.pageSize } }
+    return {
+      format: 'pdf',
+      sizeBytes: size,
+      durationSec: null,
+      details: { pages, pageSize: ctx.options.pageSize },
+      checks: [{ label: 'Document', detail: `Re-opened with pdf.js: ${pages} page${pages === 1 ? '' : 's'}, one per image frame` }],
+    }
   },
 }
 

@@ -52,7 +52,7 @@ function fakeAdapter(behaviour: Behaviour): ConversionAdapter<Record<string, nev
     validateOptions: () => ({}),
     estimate: () => ({ outputBytes: 100, cpuSeconds: 0 }),
     convert: (ctx) => behaviour({ signal: ctx.signal, outputPath: ctx.outputPath, attempt: ++attempt }),
-    verifyOutput: async (ctx) => ({ format: 'mp3', sizeBytes: statSync(ctx.outputPath).size, durationSec: 1, details: {} }),
+    verifyOutput: async (ctx) => ({ format: 'mp3', sizeBytes: statSync(ctx.outputPath).size, durationSec: 1, details: {}, checks: [] }),
   }
 }
 

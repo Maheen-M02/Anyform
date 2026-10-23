@@ -69,7 +69,11 @@ export function createArchiveAdapter(output: ArchiveOutput): ConversionAdapter<R
       }
       const details: Record<string, string | number> = { files: out.files, folders: out.directories, unpackedBytes: out.unpackedBytes }
       if (src.skipped) details.skipped = src.skipped
-      return { format: output, sizeBytes: size, durationSec: null, details }
+      const checks = [
+        { label: 'Archive', detail: `Re-listed the ${label} without extracting it` },
+        { label: 'Contents', detail: `${out.files} files and ${out.unpackedBytes.toLocaleString('en-US')} bytes, identical to the source` },
+      ]
+      return { format: output, sizeBytes: size, durationSec: null, details, checks }
     },
   }
 }
